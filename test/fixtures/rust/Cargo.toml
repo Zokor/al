@@ -1,0 +1,4 @@
+[package]
+name = "agent-loop"
+version = "0.1.120"
+edition = "2024"
