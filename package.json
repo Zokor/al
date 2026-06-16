@@ -1,6 +1,6 @@
 {
   "name": "agent-loop-node-cli",
-  "version": "0.1.0",
+  "version": "0.1.120",
   "type": "module",
   "private": true,
   "bin": {
@@ -9,6 +9,7 @@
   "scripts": {
     "test": "node --test",
     "lint": "node scripts/lint.js",
+    "migrate-config": "node scripts/migrate-config.js",
     "check:rust-version": "node scripts/check-rust-version.js",
     "update:rust-version": "node scripts/update-rust-version.js"
   },

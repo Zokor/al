@@ -1,4 +1,10 @@
-import { readFile } from "node:fs/promises";
+#!/usr/bin/env node
+// Standalone .agent-loop.toml -> .agent-loop.json converter. The TOML-subset
+// parser below was moved verbatim from the retired src/config/toml.js; the
+// runtime config path reads JSON only (see src/config/json.js).
+import { readFile, stat, writeFile } from "node:fs/promises";
+import { resolve } from "node:path";
+import { pathToFileURL } from "node:url";
 
 function stripInlineComment(line) {
   let inString = false;
@@ -141,13 +147,76 @@ export function parseTomlSubset(text) {
   return root;
 }
 
-export async function readTomlSubset(path) {
+// The script must stay runnable as a single copied file, so the Node CLI's
+// schema validator is loaded lazily and its absence is non-fatal: when src/
+// is not alongside this script, validation is skipped with a notice.
+async function loadValidator() {
   try {
-    return parseTomlSubset(await readFile(path, "utf8"));
+    const module = await import(new URL("../src/config/index.js", import.meta.url).href);
+    return module.validateFileConfig;
   } catch (error) {
-    if (error.code === "ENOENT") {
-      return {};
+    if (error.code === "ERR_MODULE_NOT_FOUND") {
+      return undefined;
     }
     throw error;
   }
+}
+
+async function fileExists(path) {
+  try {
+    await stat(path);
+    return true;
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
+export async function main(argv = process.argv.slice(2)) {
+  const force = argv.includes("--force");
+  const positional = argv.filter((arg) => arg !== "--force");
+  const projectDir = resolve(positional[0] ?? process.cwd());
+  const tomlPath = resolve(projectDir, ".agent-loop.toml");
+  const jsonPath = resolve(projectDir, ".agent-loop.json");
+  let text;
+  try {
+    text = await readFile(tomlPath, "utf8");
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      process.stderr.write(`No .agent-loop.toml found in ${projectDir}; nothing to migrate.\n`);
+      process.exitCode = 1;
+      return;
+    }
+    throw error;
+  }
+  if (!force && await fileExists(jsonPath)) {
+    process.stderr.write(`${jsonPath} already exists; re-run with --force to overwrite it.\n`);
+    process.exitCode = 1;
+    return;
+  }
+  const config = parseTomlSubset(text);
+  await writeFile(jsonPath, `${JSON.stringify(config, null, 2)}\n`);
+  process.stderr.write(`Wrote ${jsonPath} from ${tomlPath}\n`);
+  // Post-conversion validation: a key that was harmlessly ignored in the
+  // TOML-only state becomes a hard error once the JSON file exists, so warn
+  // now instead of letting the next CLI invocation fail cold.
+  const validateFileConfig = await loadValidator();
+  if (!validateFileConfig) {
+    process.stderr.write(`note: skipping post-conversion validation (the node-cli src/ modules are not available next to this script); run the CLI once to check ${jsonPath}.\n`);
+    return;
+  }
+  try {
+    const { warnings } = validateFileConfig(config);
+    for (const message of warnings) {
+      process.stderr.write(`warning: ${message}\n`);
+    }
+  } catch (error) {
+    process.stderr.write(`warning: the Node CLI will reject this config (${error.message}); edit ${jsonPath} to fix it before running the CLI.\n`);
+  }
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  await main();
 }

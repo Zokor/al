@@ -1,9 +1,13 @@
-import { resolve } from "node:path";
+import { stat } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { RUST_KNOWN_FILE_CONFIG_KEYS } from "./fileConfigSchema.js";
 import { REGISTERED_PROVIDERS, assertRegisteredProvider, defaultReviewerFor } from "./agentRegistry.js";
 import { parseSlotProfile } from "./slotProfiles.js";
-import { readTomlSubset } from "./toml.js";
+import { readJsonConfig } from "./json.js";
 import { stateDirForSession } from "../state/paths.js";
+
+const MIGRATE_SCRIPT_PATH = resolve(dirname(fileURLToPath(import.meta.url)), "../../scripts/migrate-config.js");
 
 const ROLE_SLOTS = ["implementer", "reviewer", "planner", "discoverer", "verifier", "supervisor_agent"];
 const ACTION_KEYS = new Set(["plan", "tasks", "implement", "review", "discuss", "discover", "verify", "debugger", "compound", "supervisor"]);
@@ -13,7 +17,7 @@ const EFFORTS = new Set(["minimal", "low", "medium", "high", "max", "xhigh"]);
 function validateKnownRootKeys(fileConfig) {
   for (const key of Object.keys(fileConfig)) {
     if (!RUST_KNOWN_FILE_CONFIG_KEYS.has(key)) {
-      throw new Error(`unknown .agent-loop.toml key '${key}'`);
+      throw new Error(`unknown .agent-loop.json key '${key}'`);
     }
   }
 }
@@ -64,6 +68,16 @@ function validateModels(models) {
   return { models: result, warnings };
 }
 
+export function validateFileConfig(fileConfig) {
+  validateKnownRootKeys(fileConfig);
+  for (const slot of ROLE_SLOTS) {
+    parseSlotProfile(fileConfig[slot], slot, ".agent-loop.json");
+  }
+  const actionProviders = validateActionProviders(fileConfig.action_providers);
+  const { models, warnings } = validateModels(fileConfig.models);
+  return { actionProviders, models, warnings };
+}
+
 function providerFromEnv(name, env) {
   const value = env[name.toUpperCase()];
   return value ? { provider: value, profile: { primary: { provider: value } } } : undefined;
@@ -72,7 +86,7 @@ function providerFromEnv(name, env) {
 function resolveRoles(fileConfig, cliGlobals, env) {
   const slotProfiles = {};
   for (const slot of ROLE_SLOTS) {
-    const parsed = parseSlotProfile(fileConfig[slot], slot, ".agent-loop.toml");
+    const parsed = parseSlotProfile(fileConfig[slot], slot, ".agent-loop.json");
     if (parsed) {
       slotProfiles[slot] = parsed;
     }
@@ -127,14 +141,32 @@ export function emitConfigWarnings(warnings, { jsonMode = false, stderr } = {}) 
   }
 }
 
+async function fileExists(path) {
+  try {
+    await stat(path);
+    return true;
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
+}
+
 export async function loadConfig(projectDir, cli = {}, { env = process.env, now, stderr } = {}) {
   const cliGlobals = cli.globals ?? {};
-  const fileConfig = await readTomlSubset(resolve(projectDir, ".agent-loop.toml"));
-  validateKnownRootKeys(fileConfig);
-  const actionProviders = validateActionProviders(fileConfig.action_providers);
-  const modelResolution = validateModels(fileConfig.models);
+  const jsonPath = resolve(projectDir, ".agent-loop.json");
+  const fileConfig = await readJsonConfig(jsonPath);
+  const { actionProviders, models, warnings } = validateFileConfig(fileConfig);
   const roleResolution = resolveRoles(fileConfig, { ...cliGlobals, ...cli.commandArgs }, env);
-  emitConfigWarnings(modelResolution.warnings, { jsonMode: Boolean(cliGlobals.json), stderr });
+  if (await fileExists(resolve(projectDir, ".agent-loop.toml"))) {
+    if (await fileExists(jsonPath)) {
+      warnings.push(".agent-loop.toml is ignored by the Node CLI; .agent-loop.json takes precedence.");
+    } else {
+      warnings.push(`found .agent-loop.toml, but the Node CLI now reads .agent-loop.json; run 'node "${MIGRATE_SCRIPT_PATH}" "${resolve(projectDir)}"' to convert it.`);
+    }
+  }
+  emitConfigWarnings(warnings, { jsonMode: Boolean(cliGlobals.json), stderr });
   return {
     projectDir,
     stateDir: stateDirForSession(projectDir, cliGlobals.session),
@@ -146,8 +178,8 @@ export async function loadConfig(projectDir, cli = {}, { env = process.env, now,
     planRequiresApproval: cliGlobals.requirePlanApproval || (!cliGlobals.noPlanApproval && Boolean(fileConfig.plan_requires_approval)),
     decisionsEnabled: fileConfig.decisions_enabled !== false,
     actionProviders,
-    models: modelResolution.models,
-    warnings: modelResolution.warnings,
+    models,
+    warnings,
     actionOverrides: cliGlobals.actionOverrides ?? [],
     eventsEnabled: true,
     now,
