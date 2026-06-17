@@ -1,0 +1,1181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agent Loop — A Plain-English Guide</title>
+<link href="https://fonts.googleapis.com/css2?family=Archivo:wght@500;600;700;800&family=Open+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+/* ===========================================
+   VIEWPORT FITTING: MANDATORY BASE STYLES
+   Each slide = exactly one viewport. Never scroll inside a slide.
+   =========================================== */
+html, body { height: 100%; overflow-x: hidden; margin: 0; padding: 0; }
+html { scroll-snap-type: y mandatory; scroll-behavior: smooth; }
+.slide {
+    width: 100vw;
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+    scroll-snap-align: start;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+}
+.slide-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: flex-start;
+    max-height: 100%;
+    overflow: hidden;
+    padding: var(--slide-padding);
+    gap: clamp(0.5rem, 1.7vh, 1.4rem);
+}
+
+:root {
+    /* Fluid type + spacing */
+    --title-size: clamp(2rem, 6vw, 4.75rem);
+    --h2-size: clamp(1.3rem, 3.6vw, 2.6rem);
+    --h3-size: clamp(1rem, 2.4vw, 1.6rem);
+    --body-size: clamp(0.8rem, 1.5vw, 1.15rem);
+    --small-size: clamp(0.68rem, 1.05vw, 0.9rem);
+    --slide-padding: clamp(1.1rem, 4.5vw, 4.5rem);
+    --content-gap: clamp(0.5rem, 2vw, 1.75rem);
+    --element-gap: clamp(0.3rem, 1vw, 0.85rem);
+
+    /* THEME: BNP Paribas influence — signature green, clean neutrals, "rising stars" */
+    --bg: #f1f5f3;
+    --card: #ffffff;
+    --ink: #152025;
+    --ink-soft: #46524e;
+    --ink-dim: #7c8582;
+    --line: #dbe3df;
+    --primary: #016c47;        /* BNP Paribas deep green */
+    --primary-2: #03a776;      /* brighter emerald partner */
+    --primary-soft: #e3f0ea;
+    --amber: #b8801c;          /* muted gold — tips & "caution" status */
+    --amber-soft: #f6ecd6;
+    --green: #0a8a57;          /* success / pass */
+    --green-soft: #e2f1ea;
+    --green-line: #b2ddc8;
+    --red: #cf3a2c;            /* problem / stop */
+    --red-soft: #f9e3df;
+    --red-line: #f0c6bd;
+    --purple: #0470b1;         /* BNP blue — supervisor / swap / info (kept var name) */
+    --purple-soft: #e4eff7;
+    --purple-line: #bcd9ef;
+    --shadow: 0 14px 38px -16px rgba(8,40,28,0.20), 0 3px 8px -3px rgba(8,40,28,0.08);
+    --shadow-sm: 0 6px 18px -10px rgba(8,40,28,0.20);
+    --radius: 18px;
+    --radius-sm: 12px;
+}
+
+/* Short / narrow viewport adjustments (mandatory breakpoints) */
+@media (max-height: 700px) {
+    :root {
+        --slide-padding: clamp(0.85rem, 3vw, 2.25rem);
+        --content-gap: clamp(0.4rem, 1.5vw, 1rem);
+        --title-size: clamp(1.6rem, 5vw, 3rem);
+        --h2-size: clamp(1.15rem, 3vw, 1.9rem);
+    }
+}
+@media (max-height: 600px) {
+    :root {
+        --slide-padding: clamp(0.6rem, 2.5vw, 1.5rem);
+        --content-gap: clamp(0.3rem, 1vw, 0.7rem);
+        --title-size: clamp(1.35rem, 4vw, 2.2rem);
+        --body-size: clamp(0.72rem, 1.2vw, 0.95rem);
+    }
+    .keyboard-hint, .orb { display: none; }
+}
+@media (max-height: 500px) {
+    :root {
+        --slide-padding: clamp(0.5rem, 2vw, 1rem);
+        --title-size: clamp(1.2rem, 3.5vw, 1.6rem);
+        --h2-size: clamp(1rem, 2.5vw, 1.35rem);
+        --body-size: clamp(0.68rem, 1vw, 0.85rem);
+    }
+    /* tighten dense slides on landscape phones */
+    .slide-content { gap: clamp(0.28rem, 0.9vh, 0.55rem); }
+    .analogy { padding: clamp(0.45rem, 1.1vw, 0.75rem) clamp(0.65rem, 1.3vw, 0.95rem); }
+    .f-card, .compare-card { padding: clamp(0.5rem, 1.2vw, 0.8rem); }
+}
+@media (max-width: 600px) {
+    :root { --title-size: clamp(1.6rem, 8vw, 2.6rem); }
+}
+@media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+        animation-duration: 0.01ms !important;
+        transition-duration: 0.2s !important;
+    }
+    html { scroll-behavior: auto; }
+}
+
+/* ===========================================
+   BASE LOOK
+   =========================================== */
+body {
+    font-family: 'Open Sans', system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+}
+
+/* faint warm dot grid */
+.slide::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background-image: radial-gradient(var(--line) 1.2px, transparent 1.2px);
+    background-size: 28px 28px;
+    opacity: 0.55;
+    pointer-events: none;
+    z-index: 0;
+}
+.slide-content { position: relative; z-index: 2; }
+
+/* soft colored glow orbs */
+.orb {
+    position: absolute;
+    border-radius: 50%;
+    filter: blur(75px);
+    pointer-events: none;
+    z-index: 0;
+    width: clamp(220px, 32vw, 540px);
+    height: clamp(220px, 32vw, 540px);
+}
+.orb--primary { background: radial-gradient(circle, rgba(3,167,118,0.26), transparent 70%); }
+.orb--amber { background: radial-gradient(circle, rgba(1,108,71,0.20), transparent 70%); }
+
+/* slide number */
+.slide-number {
+    position: absolute;
+    top: clamp(0.8rem, 2vw, 1.6rem);
+    right: clamp(0.9rem, 2.2vw, 1.8rem);
+    font-size: var(--small-size);
+    color: var(--ink-dim);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    z-index: 3;
+}
+
+/* typography */
+h1, h2 { font-family: 'Archivo', system-ui, sans-serif; letter-spacing: -0.015em; }
+h1 { font-size: var(--title-size); font-weight: 600; line-height: 1.04; letter-spacing: -0.01em; color: var(--ink); margin: 0; }
+h2 { font-size: var(--h2-size); font-weight: 600; line-height: 1.1; letter-spacing: -0.01em; color: var(--ink); margin: 0; }
+h3 { font-size: var(--h3-size); font-weight: 700; color: var(--ink); margin: 0; line-height: 1.2; }
+p { font-size: var(--body-size); line-height: 1.55; color: var(--ink); margin: 0; }
+
+.lead { color: var(--ink-soft); max-width: 64ch; }
+.note { font-size: var(--small-size); color: var(--ink-dim); line-height: 1.45; }
+.center { text-align: center; }
+.fill { width: 100%; }
+.primary { color: var(--primary); }
+.amber { color: var(--amber); }
+.green { color: var(--green); }
+.red { color: var(--red); }
+.purple { color: var(--purple); }
+b, strong { font-weight: 700; color: var(--ink); }
+
+/* kicker / eyebrow */
+.kicker {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45em;
+    font-size: var(--small-size);
+    font-weight: 700;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--primary);
+    background: var(--primary-soft);
+    padding: 0.4em 0.85em;
+    border-radius: 999px;
+}
+.kicker::before { content: '✦'; font-size: 0.95em; line-height: 1; opacity: 0.9; } /* BNP rising-star motif */
+
+/* ===========================================
+   DIAGRAM TOOLKIT
+   =========================================== */
+.diagram { width: 100%; }
+.row { display: flex; align-items: center; gap: clamp(0.35rem, 1vw, 0.75rem); flex-wrap: wrap; }
+.row.center-x { justify-content: center; }
+.col { display: flex; flex-direction: column; }
+
+/* a labelled node used across diagrams */
+.node {
+    background: var(--card);
+    border: 1.5px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: clamp(0.45rem, 1.1vw, 0.8rem) clamp(0.6rem, 1.4vw, 1.05rem);
+    box-shadow: var(--shadow-sm);
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5em;
+    font-weight: 600;
+    font-size: clamp(0.74rem, 1.35vw, 1rem);
+    color: var(--ink);
+    line-height: 1.2;
+}
+.node .emoji { font-size: clamp(1.05rem, 2vw, 1.55rem); line-height: 1; }
+.node--primary { border-color: var(--primary-2); background: var(--primary-soft); color: var(--primary); }
+.node--green   { border-color: var(--green-line); background: var(--green-soft); color: var(--green); }
+.node--amber   { border-color: #ecc98a; background: var(--amber-soft); color: var(--amber); }
+.node--red     { border-color: var(--red-line); background: var(--red-soft); color: var(--red); }
+.node--purple  { border-color: var(--purple-line); background: var(--purple-soft); color: var(--purple); }
+.node--ghost   { background: transparent; border-style: dashed; box-shadow: none; }
+
+.arrow { color: var(--primary); opacity: 0.55; font-size: clamp(1rem, 1.8vw, 1.6rem); font-weight: 700; }
+.arrow.down { transform: none; }
+
+/* journey / pipeline of stages */
+.journey {
+    display: flex;
+    align-items: stretch;
+    gap: clamp(0.25rem, 0.7vw, 0.55rem);
+    flex-wrap: wrap;
+    justify-content: center;
+    width: 100%;
+}
+.stage {
+    background: var(--card);
+    border: 1.5px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: clamp(0.5rem, 1.2vw, 0.95rem) clamp(0.4rem, 1vw, 0.7rem);
+    box-shadow: var(--shadow-sm);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 0.2rem;
+    text-align: center;
+    flex: 1 1 0;
+    min-width: clamp(68px, 8.7vw, 118px);
+    max-width: 150px;
+}
+.stage .emoji { font-size: clamp(1.2rem, 2.6vw, 1.9rem); line-height: 1; }
+.stage .stage-name { font-weight: 700; font-size: clamp(0.72rem, 1.3vw, 0.98rem); color: var(--ink); }
+.stage .stage-sub { font-size: clamp(0.6rem, 1vw, 0.78rem); color: var(--ink-dim); line-height: 1.25; }
+.stage-arrow { align-self: center; color: var(--primary); opacity: 0.5; font-size: clamp(0.9rem, 1.5vw, 1.3rem); font-weight: 700; }
+@media (max-width: 720px) { .stage-arrow { transform: rotate(90deg); } }
+
+/* analogy callout */
+.analogy {
+    display: flex;
+    gap: clamp(0.6rem, 1.4vw, 1rem);
+    align-items: flex-start;
+    background: var(--amber-soft);
+    border: 1.5px solid #eccb8e;
+    border-left: 5px solid var(--amber);
+    border-radius: var(--radius-sm);
+    padding: clamp(0.65rem, 1.5vw, 1.1rem) clamp(0.85rem, 1.8vw, 1.3rem);
+    max-width: 80ch;
+}
+.analogy .a-icon { font-size: clamp(1.2rem, 2.2vw, 1.7rem); line-height: 1.1; flex-shrink: 0; }
+.analogy p { color: var(--ink-soft); font-size: var(--body-size); }
+
+/* generic card grid */
+.cards { display: grid; gap: clamp(0.5rem, 1.4vw, 1rem); width: 100%; }
+.cards--2 { grid-template-columns: repeat(2, 1fr); }
+.cards--3 { grid-template-columns: repeat(3, 1fr); }
+.cards--4 { grid-template-columns: repeat(4, 1fr); }
+@media (max-width: 820px) {
+    .cards--3, .cards--4 { grid-template-columns: repeat(2, 1fr); }
+}
+@media (max-width: 560px) {
+    .cards--2, .cards--3, .cards--4 { grid-template-columns: 1fr; }
+}
+.f-card {
+    background: var(--card);
+    border: 1.5px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: clamp(0.7rem, 1.6vw, 1.2rem);
+    box-shadow: var(--shadow-sm);
+    display: flex;
+    flex-direction: column;
+    gap: clamp(0.3rem, 0.8vw, 0.55rem);
+}
+.f-card .emoji { font-size: clamp(1.4rem, 2.6vw, 2rem); line-height: 1; }
+.f-card h3 { font-size: clamp(0.85rem, 1.6vw, 1.2rem); }
+.f-card p { font-size: var(--small-size); color: var(--ink-soft); line-height: 1.45; }
+.f-card .tag-top {
+    font-size: clamp(0.58rem, 0.9vw, 0.72rem);
+    font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase;
+    color: var(--ink-dim);
+}
+
+/* team grid (roles) */
+.team { display: grid; grid-template-columns: repeat(3, 1fr); gap: clamp(0.45rem, 1.2vw, 0.9rem); width: 100%; }
+@media (max-width: 820px) { .team { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 540px) { .team { grid-template-columns: 1fr; } }
+.role {
+    background: var(--card);
+    border: 1.5px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: clamp(0.6rem, 1.4vw, 1rem);
+    box-shadow: var(--shadow-sm);
+    display: flex; gap: 0.7rem; align-items: flex-start;
+}
+.role .emoji { font-size: clamp(1.5rem, 2.8vw, 2.1rem); line-height: 1; }
+.role .role-name { font-weight: 800; font-size: clamp(0.82rem, 1.5vw, 1.05rem); color: var(--ink); }
+.role .role-job { font-size: var(--small-size); color: var(--ink-soft); line-height: 1.4; margin-top: 0.1rem; }
+.role .role-real { font-size: clamp(0.58rem, 0.9vw, 0.72rem); color: var(--ink-dim); margin-top: 0.25rem; font-style: italic; }
+
+/* compare: without vs with */
+.compare { display: grid; grid-template-columns: 1fr 1fr; gap: clamp(0.6rem, 1.6vw, 1.3rem); width: 100%; }
+@media (max-width: 560px) { .compare { grid-template-columns: 1fr; } }
+.compare-card { border-radius: var(--radius); padding: clamp(0.8rem, 1.9vw, 1.5rem); border: 1.5px solid; display: flex; flex-direction: column; gap: clamp(0.4rem, 1vw, 0.7rem); }
+.compare-card.bad { background: var(--red-soft); border-color: var(--red-line); }
+.compare-card.good { background: var(--green-soft); border-color: var(--green-line); }
+.compare-card h3 { display: flex; align-items: center; gap: 0.5rem; font-size: clamp(0.95rem, 1.8vw, 1.35rem); }
+.compare-card.bad h3 { color: #b23a26; }
+.compare-card.good h3 { color: #045c3b; }
+.compare-card ul { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: clamp(0.25rem, 0.7vw, 0.5rem); }
+.compare-card li { font-size: var(--small-size); color: var(--ink-soft); line-height: 1.4; padding-left: 1.4em; position: relative; }
+.compare-card.bad li::before { content: '✕'; position: absolute; left: 0; color: var(--red); font-weight: 800; }
+.compare-card.good li::before { content: '✓'; position: absolute; left: 0; color: var(--green); font-weight: 800; }
+
+/* checklist */
+.checklist { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: clamp(0.3rem, 0.8vw, 0.55rem); }
+.checklist li { font-size: var(--body-size); color: var(--ink-soft); padding-left: 1.7em; position: relative; line-height: 1.4; }
+.checklist li::before {
+    content: '✓'; position: absolute; left: 0; top: 0.05em;
+    color: var(--green); font-weight: 800;
+    width: 1.15em; height: 1.15em; display: inline-flex; align-items: center; justify-content: center;
+}
+
+/* gate steps (inspection) */
+.gates { display: flex; flex-direction: column; gap: clamp(0.3rem, 0.9vh, 0.55rem); width: 100%; max-width: 880px; }
+.gate-row {
+    display: flex; align-items: center; gap: clamp(0.55rem, 1.3vw, 1rem);
+    background: var(--card); border: 1.5px solid var(--line); border-radius: var(--radius-sm);
+    padding: clamp(0.5rem, 1.2vw, 0.85rem) clamp(0.65rem, 1.4vw, 1.1rem); box-shadow: var(--shadow-sm);
+}
+.gate-badge {
+    flex-shrink: 0; width: clamp(2rem, 4vw, 2.7rem); height: clamp(2rem, 4vw, 2.7rem);
+    border-radius: 50%; display: grid; place-items: center; font-weight: 800;
+    font-size: clamp(0.8rem, 1.5vw, 1.1rem); color: #fff;
+}
+.gate-badge.a { background: var(--primary); }
+.gate-badge.b { background: var(--amber); }
+.gate-badge.c { background: var(--purple); }
+.gate-badge.ok { background: var(--green); }
+.gate-text .gate-title { font-weight: 700; font-size: clamp(0.82rem, 1.45vw, 1.1rem); color: var(--ink); }
+.gate-text .gate-desc { font-size: var(--small-size); color: var(--ink-soft); line-height: 1.4; }
+.gate-connector { color: var(--ink-dim); text-align: center; font-size: clamp(0.9rem, 1.5vw, 1.3rem); line-height: 0.4; opacity: 0.6; }
+
+/* loop bracket (build → check → fix) */
+.loop-bracket {
+    border: 2px dashed var(--primary-2);
+    border-radius: var(--radius);
+    padding: clamp(0.8rem, 1.8vw, 1.4rem) clamp(0.7rem, 1.6vw, 1.2rem) clamp(0.65rem, 1.5vw, 1rem);
+    position: relative;
+    display: flex; align-items: center; gap: clamp(0.35rem, 1vw, 0.7rem); flex-wrap: wrap; justify-content: center;
+    background: rgba(255,255,255,0.5);
+}
+.loop-label {
+    position: absolute; top: calc(-1 * clamp(0.55rem, 1.1vw, 0.75rem)); left: clamp(0.8rem, 1.6vw, 1.4rem);
+    background: var(--bg); padding: 0 0.6em; font-size: clamp(0.6rem, 0.95vw, 0.78rem);
+    color: var(--primary); font-weight: 800; letter-spacing: 0.05em; text-transform: uppercase;
+}
+
+/* decision chips */
+.decisions { display: grid; grid-template-columns: repeat(4, 1fr); gap: clamp(0.4rem, 1.1vw, 0.85rem); width: 100%; }
+@media (max-width: 820px) { .decisions { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 480px) { .decisions { grid-template-columns: 1fr; } }
+.decision { border-radius: var(--radius-sm); padding: clamp(0.55rem, 1.3vw, 0.9rem); border: 1.5px solid; display: flex; flex-direction: column; gap: 0.2rem; }
+.decision .d-head { display: flex; align-items: center; gap: 0.45rem; font-weight: 800; font-size: clamp(0.78rem, 1.4vw, 1.02rem); }
+.decision .d-desc { font-size: var(--small-size); color: var(--ink-soft); line-height: 1.35; }
+.decision.ship { background: var(--green-soft); border-color: var(--green-line); }
+.decision.ship .d-head { color: #045c3b; }
+.decision.fix { background: var(--amber-soft); border-color: #ecc98a; }
+.decision.fix .d-head { color: var(--amber); }
+.decision.swap { background: var(--purple-soft); border-color: var(--purple-line); }
+.decision.swap .d-head { color: var(--purple); }
+.decision.stop { background: var(--red-soft); border-color: var(--red-line); }
+.decision.stop .d-head { color: #b23a26; }
+
+/* big "team in a box" */
+.teambox {
+    position: relative;
+    border: 2.5px solid var(--primary-2);
+    border-radius: var(--radius);
+    padding: clamp(1.1rem, 2.6vw, 1.9rem) clamp(0.9rem, 2vw, 1.5rem) clamp(0.9rem, 2vw, 1.4rem);
+    background: linear-gradient(180deg, rgba(236,235,254,0.6), rgba(255,255,255,0.4));
+    width: 100%; max-width: 900px;
+}
+.teambox-label {
+    position: absolute; top: calc(-1 * clamp(0.7rem, 1.4vw, 1rem)); left: 50%; transform: translateX(-50%);
+    background: var(--primary); color: #fff; padding: 0.35em 1.1em; border-radius: 999px;
+    font-weight: 800; font-size: clamp(0.74rem, 1.4vw, 1rem); letter-spacing: 0.02em; white-space: nowrap;
+    box-shadow: var(--shadow-sm);
+}
+.teambox-inner { display: flex; flex-wrap: wrap; gap: clamp(0.4rem, 1.1vw, 0.8rem); justify-content: center; }
+.chip {
+    background: var(--card); border: 1.5px solid var(--line); border-radius: 999px;
+    padding: clamp(0.4rem, 1vw, 0.6rem) clamp(0.65rem, 1.4vw, 1rem);
+    display: inline-flex; align-items: center; gap: 0.45em; box-shadow: var(--shadow-sm);
+    font-weight: 700; font-size: clamp(0.74rem, 1.35vw, 1rem); color: var(--ink);
+}
+.chip .emoji { font-size: clamp(1.05rem, 2vw, 1.5rem); }
+
+/* swap / slot mapping rows */
+.slot-row { display: flex; align-items: center; gap: clamp(0.4rem, 1.2vw, 0.9rem); flex-wrap: wrap; }
+.tag-ai {
+    background: var(--primary-soft); color: var(--primary); border: 1.5px solid var(--primary-2);
+    border-radius: 999px; padding: 0.3em 0.85em; font-weight: 700; font-size: clamp(0.72rem, 1.3vw, 0.95rem);
+}
+.tag-ai.exp { background: #fff; color: var(--ink-soft); border-color: var(--line); border-style: dashed; }
+
+/* layered config */
+.layers { display: flex; flex-direction: column; gap: clamp(0.35rem, 1vh, 0.6rem); width: 100%; max-width: 720px; }
+.layer {
+    display: flex; align-items: center; gap: 0.8rem;
+    border-radius: var(--radius-sm); padding: clamp(0.55rem, 1.3vw, 0.95rem) clamp(0.75rem, 1.6vw, 1.2rem);
+    border: 1.5px solid var(--line); background: var(--card); box-shadow: var(--shadow-sm);
+}
+.layer .l-emoji { font-size: clamp(1.2rem, 2.2vw, 1.7rem); }
+.layer .l-name { font-weight: 800; font-size: clamp(0.82rem, 1.5vw, 1.1rem); color: var(--ink); }
+.layer .l-desc { font-size: var(--small-size); color: var(--ink-soft); }
+.layer.l1 { width: 70%; }
+.layer.l2 { width: 85%; }
+.layer.l3 { width: 100%; border-color: var(--primary-2); background: var(--primary-soft); }
+@media (max-width: 640px) { .layer.l1, .layer.l2, .layer.l3 { width: 100%; } }
+
+/* agent communication: relay + shared workspace */
+.comm-relay { display: flex; align-items: center; gap: clamp(0.2rem, 0.7vw, 0.45rem); flex-wrap: wrap; justify-content: center; width: 100%; }
+.doc-emoji { font-size: clamp(1rem, 1.85vw, 1.45rem); line-height: 1; }
+.workspace-bar {
+    width: 100%; max-width: 860px;
+    background: linear-gradient(180deg, var(--primary-soft), rgba(255,255,255,0.55));
+    border: 2px dashed var(--primary-2);
+    border-radius: var(--radius);
+    padding: clamp(0.5rem, 1.3vw, 0.95rem) clamp(0.8rem, 1.6vw, 1.2rem);
+    display: flex; flex-direction: column; align-items: center; gap: clamp(0.3rem, 0.8vw, 0.5rem);
+}
+.ws-title { font-weight: 800; color: var(--primary); font-size: clamp(0.8rem, 1.5vw, 1.08rem); display: flex; align-items: center; gap: 0.4rem; text-align: center; }
+.ws-docs { display: flex; flex-wrap: wrap; gap: clamp(0.3rem, 0.8vw, 0.5rem); justify-content: center; }
+.doc-chip {
+    background: #fff; border: 1.5px solid var(--line); border-radius: 999px;
+    padding: 0.28em 0.75em; font-size: clamp(0.64rem, 1.05vw, 0.84rem); font-weight: 600; color: var(--ink-soft);
+    display: inline-flex; gap: 0.35em; align-items: center; white-space: nowrap;
+}
+
+/* title slide */
+.title-slide .slide-content { align-items: center; text-align: center; justify-content: center; }
+.title-icons { display: flex; gap: clamp(0.4rem, 1.2vw, 0.9rem); flex-wrap: wrap; justify-content: center; }
+
+/* progress + hints */
+.progress-wrap { position: fixed; bottom: 0; left: 0; width: 100%; height: 3px; background: rgba(0,0,0,0.06); z-index: 100; }
+.progress-bar { height: 100%; width: 0%; background: linear-gradient(90deg, var(--primary), var(--primary-2)); transition: width 0.3s ease; }
+.keyboard-hint {
+    position: fixed; bottom: clamp(0.5rem, 1.5vh, 1rem); right: clamp(0.8rem, 2vw, 1.6rem);
+    font-size: clamp(0.55rem, 0.85vw, 0.72rem); color: var(--ink-dim); z-index: 100; opacity: 0.6;
+}
+
+/* reveal animations */
+.reveal { opacity: 0; transform: translateY(18px); transition: opacity 0.55s ease, transform 0.55s ease; }
+.reveal.visible { opacity: 1; transform: translateY(0); }
+.reveal-delay-1 { transition-delay: 0.08s; }
+.reveal-delay-2 { transition-delay: 0.18s; }
+.reveal-delay-3 { transition-delay: 0.30s; }
+.reveal-delay-4 { transition-delay: 0.42s; }
+
+/* ===========================================
+   BNP-STYLE GREEN HERO + RISING-STARS MOTIF
+   =========================================== */
+.hero-green { background: linear-gradient(135deg, #016c47 0%, #014b31 100%); }
+.hero-green::after { background-image: radial-gradient(rgba(255,255,255,0.5) 1.2px, transparent 1.2px); opacity: 0.10; }
+.hero-green h1, .hero-green h2 { color: #ffffff; }
+/* Only recolor direct-child paragraphs — never text inside cards/analogy placed on the hero */
+.hero-green > .slide-content > p,
+.hero-green > .slide-content > .lead { color: rgba(255,255,255,0.86); }
+.hero-green > .slide-content > p.note { color: rgba(255,255,255,0.60); }
+.hero-green .slide-number { color: rgba(255,255,255,0.55); }
+.hero-green .kicker { background: rgba(255,255,255,0.16); color: #ffffff; }
+.hero-green .chip { background: rgba(255,255,255,0.12); border-color: rgba(255,255,255,0.28); color: #ffffff; box-shadow: none; }
+.hero-green .orb--primary { background: radial-gradient(circle, rgba(3,167,118,0.45), transparent 70%); }
+.hero-green .orb--amber { background: radial-gradient(circle, rgba(255,255,255,0.12), transparent 70%); }
+
+/* the "courbe d'envol" — a rising sweep of 4-pointed stars */
+.bnp-stars { position: absolute; inset: 0; z-index: 1; pointer-events: none; overflow: hidden; }
+.bnp-star { position: absolute; color: #ffffff; line-height: 1; opacity: 0.9; filter: drop-shadow(0 2px 10px rgba(0,0,0,0.12)); }
+@media (max-height: 500px) { .bnp-stars { display: none; } }
+
+/* simple-vs-complex comparison */
+.compare-card.simple { background: var(--green-soft); border-color: var(--green-line); }
+.compare-card.simple h3 { color: #045c3b; }
+.compare-card.complex { background: var(--purple-soft); border-color: var(--purple-line); }
+.compare-card.complex h3 { color: var(--purple); }
+.mini-flow { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; }
+.mini-node { background: #fff; border: 1.5px solid var(--line); border-radius: 8px; padding: 0.22em 0.5em; font-size: clamp(0.68rem, 1.15vw, 0.9rem); font-weight: 600; color: var(--ink); display: inline-flex; align-items: center; gap: 0.3em; }
+.mini-arrow { color: var(--ink-dim); font-weight: 700; font-size: 0.85em; }
+</style>
+</head>
+<body>
+
+<div class="progress-wrap"><div class="progress-bar" id="progress"></div></div>
+<div class="keyboard-hint">Use arrow keys or scroll to move through</div>
+
+<main>
+
+<!-- ==================== 01 · TITLE ==================== -->
+<section class="slide title-slide hero-green" id="slide-1">
+    <div class="orb orb--primary" style="top:-8%; left:8%;"></div>
+    <div class="orb orb--amber" style="bottom:-10%; right:6%;"></div>
+    <div class="bnp-stars" aria-hidden="true">
+        <span class="bnp-star" style="top:42%; left:63%; font-size:0.9rem; opacity:0.30;">✦</span>
+        <span class="bnp-star" style="top:33%; left:71%; font-size:1.3rem; opacity:0.45;">✦</span>
+        <span class="bnp-star" style="top:23%; left:79%; font-size:1.8rem; opacity:0.62;">✦</span>
+        <span class="bnp-star" style="top:12%; left:87%; font-size:2.6rem; opacity:0.82;">✦</span>
+        <span class="bnp-star" style="top:3%;  left:94%; font-size:3.4rem; opacity:0.95;">✦</span>
+        <span class="bnp-star" style="top:80%; left:9%;  font-size:1rem;   opacity:0.32;">✦</span>
+        <span class="bnp-star" style="top:88%; left:16%; font-size:0.7rem; opacity:0.22;">✦</span>
+    </div>
+    <div class="slide-content">
+        <span class="kicker reveal">A plain-English guide</span>
+        <h1 class="reveal reveal-delay-1">Agent&nbsp;Loop</h1>
+        <p class="reveal reveal-delay-2" style="font-size: var(--h3-size); max-width: 24ch; font-family:'Archivo',sans-serif; font-weight:500;">
+            Your AI software team — that builds, double-checks, and fixes its own work.
+        </p>
+        <div class="title-icons reveal reveal-delay-3" style="margin-top: var(--element-gap);">
+            <span class="chip"><span class="emoji">🔍</span> Research</span>
+            <span class="chip"><span class="emoji">🗺️</span> Plan</span>
+            <span class="chip"><span class="emoji">🛠️</span> Build</span>
+            <span class="chip"><span class="emoji">👀</span> Check</span>
+            <span class="chip"><span class="emoji">✅</span> Ship</span>
+        </div>
+        <p class="note reveal reveal-delay-4" style="margin-top: var(--element-gap);">No jargon. Here's how it actually works.</p>
+    </div>
+    <span class="slide-number">01 / 18</span>
+</section>
+
+<!-- ==================== 02 · THE BIG IDEA ==================== -->
+<section class="slide" id="slide-2">
+    <div class="orb orb--primary" style="top:-12%; right:0%;"></div>
+    <div class="slide-content">
+        <span class="kicker reveal">The big idea</span>
+        <h2 class="reveal reveal-delay-1">It's a whole software team — in a box</h2>
+        <p class="lead reveal reveal-delay-2">
+            One AI writing code alone is like a freelancer with no manager. Agent Loop is the opposite:
+            a coordinated <b>team</b>, where each AI has a job and a <b>supervisor</b> makes sure the work is
+            actually good before anyone calls it done.
+        </p>
+        <div class="teambox reveal reveal-delay-2" style="margin: 0.4rem auto 0;">
+            <span class="teambox-label">📦 Agent Loop</span>
+            <div class="teambox-inner">
+                <span class="chip"><span class="emoji">🔍</span> Researcher</span>
+                <span class="chip"><span class="emoji">🗺️</span> Planner</span>
+                <span class="chip"><span class="emoji">🛠️</span> Builder</span>
+                <span class="chip"><span class="emoji">👀</span> Inspector</span>
+                <span class="chip"><span class="emoji">✅</span> Tester</span>
+                <span class="chip"><span class="emoji">🧑‍💼</span> Supervisor</span>
+            </div>
+        </div>
+        <div class="analogy reveal reveal-delay-3">
+            <span class="a-icon">🏗️</span>
+            <p><b>Think of it like a general contractor.</b> You describe what you want — and a managed crew handles
+            the research, planning, building, and inspection. You don't babysit every step.</p>
+        </div>
+    </div>
+    <span class="slide-number">02 / 18</span>
+</section>
+
+<!-- ==================== 03 · WHY IT EXISTS ==================== -->
+<section class="slide" id="slide-3">
+    <div class="slide-content">
+        <span class="kicker reveal">Why it exists</span>
+        <h2 class="reveal reveal-delay-1">Why not just ask one AI to "build it"?</h2>
+        <p class="lead reveal reveal-delay-2">Because no one checks the work. Here's the difference:</p>
+        <div class="compare reveal reveal-delay-2">
+            <div class="compare-card bad">
+                <h3><span>😵</span> One AI, going solo</h3>
+                <ul>
+                    <li>Guesses what you really meant</li>
+                    <li>Writes code with no one reviewing it</li>
+                    <li>You discover the bugs later — the hard way</li>
+                    <li>If it gets stuck, it just keeps churning</li>
+                </ul>
+            </div>
+            <div class="compare-card good">
+                <h3><span>✅</span> Agent Loop</h3>
+                <ul>
+                    <li>Agrees on the goal <b>before</b> building</li>
+                    <li>A second AI inspects every change</li>
+                    <li>Fixes problems automatically, then re-tests</li>
+                    <li>Knows when it's stuck — and stops to tell you</li>
+                </ul>
+            </div>
+        </div>
+    </div>
+    <span class="slide-number">03 / 18</span>
+</section>
+
+<!-- ==================== 04 · THE JOURNEY ==================== -->
+<section class="slide" id="slide-4">
+    <div class="orb orb--amber" style="bottom:-14%; left:10%;"></div>
+    <div class="slide-content">
+        <span class="kicker reveal">The journey</span>
+        <h2 class="reveal reveal-delay-1">From an idea to a finished feature</h2>
+        <p class="lead reveal reveal-delay-2">Every job moves through the same clear steps. Each step hands clean notes to the next.</p>
+        <div class="journey reveal reveal-delay-2">
+            <div class="stage"><span class="emoji">🔍</span><span class="stage-name">Research</span><span class="stage-sub">Study your code</span></div>
+            <span class="stage-arrow">&rarr;</span>
+            <div class="stage"><span class="emoji">💬</span><span class="stage-name">Discuss</span><span class="stage-sub">Agree on the goal</span></div>
+            <span class="stage-arrow">&rarr;</span>
+            <div class="stage"><span class="emoji">📋</span><span class="stage-name">Spec</span><span class="stage-sub">Write the checklist</span></div>
+            <span class="stage-arrow">&rarr;</span>
+            <div class="stage"><span class="emoji">🗺️</span><span class="stage-name">Plan</span><span class="stage-sub">Decide the approach</span></div>
+            <span class="stage-arrow">&rarr;</span>
+            <div class="stage"><span class="emoji">🧩</span><span class="stage-name">Tasks</span><span class="stage-sub">Break into to-dos</span></div>
+            <span class="stage-arrow">&rarr;</span>
+            <div class="stage"><span class="emoji">🛠️</span><span class="stage-name">Build</span><span class="stage-sub">Write the code</span></div>
+            <span class="stage-arrow">&rarr;</span>
+            <div class="stage"><span class="emoji">✅</span><span class="stage-name">Test</span><span class="stage-sub">Prove it works</span></div>
+        </div>
+        <div class="analogy reveal reveal-delay-3">
+            <span class="a-icon">💡</span>
+            <p>You can run the <b>whole line at once</b>, or just one station at a time. The next slides walk through each step.</p>
+        </div>
+    </div>
+    <span class="slide-number">04 / 18</span>
+</section>
+
+<!-- ==================== 05 · MEET THE TEAM ==================== -->
+<section class="slide" id="slide-5">
+    <div class="slide-content">
+        <span class="kicker reveal">The cast</span>
+        <h2 class="reveal reveal-delay-1">Meet the team</h2>
+        <p class="lead reveal reveal-delay-2">Each role is played by an AI assistant doing one clear job.</p>
+        <div class="team reveal reveal-delay-2">
+            <div class="role"><span class="emoji">🔍</span><div><div class="role-name">The Researcher</div><div class="role-job">Studies your existing code before anyone starts.</div></div></div>
+            <div class="role"><span class="emoji">🗺️</span><div><div class="role-name">The Planner</div><div class="role-job">Decides the approach and breaks it into tasks.</div></div></div>
+            <div class="role"><span class="emoji">🛠️</span><div><div class="role-name">The Builder</div><div class="role-job">Writes the actual code, task by task.</div></div></div>
+            <div class="role"><span class="emoji">👀</span><div><div class="role-name">The Inspector</div><div class="role-job">Reviews every change for bugs and quality.</div></div></div>
+            <div class="role"><span class="emoji">✅</span><div><div class="role-name">The Tester</div><div class="role-job">Proves the finished feature actually works.</div></div></div>
+            <div class="role"><span class="emoji">🧑‍💼</span><div><div class="role-name">The Supervisor</div><div class="role-job">Runs the loop and decides when it's truly done.</div></div></div>
+        </div>
+    </div>
+    <span class="slide-number">05 / 18</span>
+</section>
+
+<!-- ==================== 06 · MIX AND MATCH ==================== -->
+<section class="slide" id="slide-6">
+    <div class="orb orb--primary" style="top:0%; right:-6%;"></div>
+    <div class="slide-content">
+        <span class="kicker reveal">Your choice</span>
+        <h2 class="reveal reveal-delay-1">Pick the best AI for each job</h2>
+        <p class="lead reveal reveal-delay-2">
+            Any role can be played by a different AI assistant. Use one for everything — or mix them:
+            a strong builder here, a sharp reviewer there.
+        </p>
+        <div class="diagram reveal reveal-delay-2 col" style="gap: clamp(0.4rem,1vh,0.7rem); max-width: 640px;">
+            <div class="slot-row"><span class="node node--primary"><span class="emoji">🛠️</span> Builder</span><span class="arrow">&larr;</span><span class="tag-ai">Claude</span></div>
+            <div class="slot-row"><span class="node node--primary"><span class="emoji">👀</span> Inspector</span><span class="arrow">&larr;</span><span class="tag-ai">Codex</span></div>
+            <div class="slot-row"><span class="node node--primary"><span class="emoji">🗺️</span> Planner</span><span class="arrow">&larr;</span><span class="tag-ai">Claude</span></div>
+        </div>
+        <div class="row reveal reveal-delay-3" style="gap: 0.5rem;">
+            <span class="note" style="font-weight:700;">Available:</span>
+            <span class="tag-ai">Claude</span>
+            <span class="tag-ai">Codex</span>
+            <span class="tag-ai exp">Copilot</span>
+            <span class="tag-ai exp">Cursor</span>
+            <span class="tag-ai exp">+ more</span>
+        </div>
+        <div class="analogy reveal reveal-delay-4">
+            <span class="a-icon">💡</span>
+            <p><b>Like choosing contractors:</b> maybe one firm for the foundation, another for the finishing — whoever's best for the task.</p>
+        </div>
+    </div>
+    <span class="slide-number">06 / 18</span>
+</section>
+
+<!-- ==================== 07 · HOW THE AGENTS COMMUNICATE ==================== -->
+<section class="slide" id="slide-comm">
+    <div class="orb orb--primary" style="top:-10%; left:6%;"></div>
+    <div class="orb orb--amber" style="bottom:-12%; right:6%;"></div>
+    <div class="slide-content">
+        <span class="kicker reveal">How they coordinate</span>
+        <h2 class="reveal reveal-delay-1">How the agents talk to each other</h2>
+        <p class="lead reveal reveal-delay-2">
+            Here's the surprising part: the agents never chat live. Each one <b>writes its work into a shared workspace</b>,
+            and the next one reads it before starting.
+        </p>
+        <div class="diagram comm-relay reveal reveal-delay-2">
+            <span class="node node--primary"><span class="emoji">🔍</span> Researcher</span>
+            <span class="arrow">&rarr;</span><span class="doc-emoji">📄</span><span class="arrow">&rarr;</span>
+            <span class="node node--primary"><span class="emoji">🗺️</span> Planner</span>
+            <span class="arrow">&rarr;</span><span class="doc-emoji">📄</span><span class="arrow">&rarr;</span>
+            <span class="node node--primary"><span class="emoji">🛠️</span> Builder</span>
+            <span class="arrow">&rarr;</span><span class="doc-emoji">📄</span><span class="arrow">&rarr;</span>
+            <span class="node node--amber"><span class="emoji">👀</span> Inspector</span>
+        </div>
+        <div class="workspace-bar reveal reveal-delay-3">
+            <span class="ws-title">🗂️ One shared workspace — the single source of truth</span>
+            <div class="ws-docs">
+                <span class="doc-chip">📄 the map</span>
+                <span class="doc-chip">📋 the checklist</span>
+                <span class="doc-chip">🗺️ the plan</span>
+                <span class="doc-chip">✅ the to-dos</span>
+                <span class="doc-chip">📝 review notes</span>
+                <span class="doc-chip">🧠 lessons learned</span>
+            </div>
+        </div>
+        <div class="cards cards--2 reveal reveal-delay-3">
+            <div class="f-card"><h3>📝 Numbered notes</h3><p>During reviews, feedback comes as <b>numbered items</b> — so nothing slips through, and the supervisor checks each one is resolved before moving on.</p></div>
+            <div class="f-card"><h3>🆕 Fresh eyes on demand</h3><p>Sometimes an agent gets only the documents, with <b>no memory</b> of the earlier chat — a deliberate, unbiased second opinion.</p></div>
+        </div>
+        <div class="analogy reveal reveal-delay-4">
+            <span class="a-icon">💡</span>
+            <p><b>Like a shared drive plus tracked comments:</b> everyone works off the same files, every comment is numbered, and nothing's "done" until each one is ticked off.</p>
+        </div>
+    </div>
+    <span class="slide-number">07 / 19</span>
+</section>
+
+<!-- ==================== 07 · STEP 1 RESEARCH ==================== -->
+<section class="slide" id="slide-7">
+    <div class="slide-content">
+        <span class="kicker reveal">Step 1 · Research</span>
+        <h2 class="reveal reveal-delay-1">Look before you leap</h2>
+        <p class="lead reveal reveal-delay-2">
+            Before planning anything, the Researcher reads through your existing code and writes a short
+            <b>map</b> of how things work today.
+        </p>
+        <div class="diagram row center-x reveal reveal-delay-2" style="margin: 0.4rem 0;">
+            <span class="node node--primary"><span class="emoji">🔍</span> Researcher</span>
+            <span class="arrow">&rarr;</span>
+            <span class="node node--amber"><span class="emoji">🗺️</span> A map of your code</span>
+            <span class="arrow">&rarr;</span>
+            <span class="node node--green"><span class="emoji">👥</span> Shared with the whole team</span>
+        </div>
+        <div class="analogy reveal reveal-delay-3">
+            <span class="a-icon">🏗️</span>
+            <p><b>Like a surveyor walking the site before construction</b> — so no one builds blind. It's done once, then reused by every step that follows.</p>
+        </div>
+    </div>
+    <span class="slide-number">07 / 18</span>
+</section>
+
+<!-- ==================== 08 · STEP 2 AGREE ==================== -->
+<section class="slide" id="slide-8">
+    <div class="orb orb--amber" style="top:-10%; right:8%;"></div>
+    <div class="slide-content">
+        <span class="kicker reveal">Step 2 · Agree</span>
+        <h2 class="reveal reveal-delay-1">Nail down what "done" means — first</h2>
+        <p class="lead reveal reveal-delay-2">
+            A short back-and-forth clears up open questions, then the team writes a <b>checklist of requirements</b>.
+            Every item is tracked, so nothing slips through later.
+        </p>
+        <div class="diagram row center-x reveal reveal-delay-2" style="gap: clamp(0.6rem,1.6vw,1.2rem); align-items: stretch;">
+            <span class="node node--primary" style="align-self:center;"><span class="emoji">💬</span> Questions &amp; answers</span>
+            <span class="arrow" style="align-self:center;">&rarr;</span>
+            <div class="f-card" style="min-width: clamp(180px, 30vw, 300px);">
+                <div class="tag-top">📋 The checklist</div>
+                <ul class="checklist" style="gap: 0.25rem;">
+                    <li>Requirement 1</li>
+                    <li>Requirement 2</li>
+                    <li>Requirement 3</li>
+                </ul>
+            </div>
+        </div>
+        <div class="analogy reveal reveal-delay-3">
+            <span class="a-icon">💡</span>
+            <p><b>Like a blueprint plus a punch-list:</b> agree on it up front, then tick every item off at the end. The team can even debate the plan to pressure-test it.</p>
+        </div>
+    </div>
+    <span class="slide-number">08 / 18</span>
+</section>
+
+<!-- ==================== 09 · STEP 3 PLAN ==================== -->
+<section class="slide" id="slide-9">
+    <div class="slide-content">
+        <span class="kicker reveal">Step 3 · Plan</span>
+        <h2 class="reveal reveal-delay-1">Turn the goal into bite-size to-dos</h2>
+        <p class="lead reveal reveal-delay-2">
+            The Planner decides the approach, then chops the work into small tasks. Some tasks depend on others —
+            Agent Loop figures out the right order automatically.
+        </p>
+        <div class="diagram row center-x reveal reveal-delay-2" style="gap: clamp(0.5rem,1.4vw,1rem); margin: 0.3rem 0;">
+            <span class="node node--primary" style="font-size: clamp(0.8rem,1.6vw,1.1rem);"><span class="emoji">🎯</span> The big goal</span>
+            <span class="arrow">&rarr;</span>
+            <div class="col" style="gap: 0.4rem;">
+                <span class="node"><span class="emoji">🧩</span> Task 1</span>
+                <span class="node"><span class="emoji">🧩</span> Task 2 <span class="note" style="font-weight:600;">(needs Task 1)</span></span>
+                <span class="node"><span class="emoji">🧩</span> Task 3</span>
+            </div>
+        </div>
+        <div class="analogy reveal reveal-delay-3">
+            <span class="a-icon">🧩</span>
+            <p><b>Like a project board:</b> one big project becomes small tickets, done in the right sequence — no one trips over unfinished work.</p>
+        </div>
+    </div>
+    <span class="slide-number">09 / 18</span>
+</section>
+
+<!-- ==================== 10 · STEP 4 BUILD (3 MODES) ==================== -->
+<section class="slide" id="slide-10">
+    <div class="slide-content">
+        <span class="kicker reveal">Step 4 · Build</span>
+        <h2 class="reveal reveal-delay-1">Three ways to get the work done</h2>
+        <div class="cards cards--3 reveal reveal-delay-2">
+            <div class="f-card">
+                <span class="emoji">📦</span>
+                <h3>All at once</h3>
+                <p>Hand the whole list to one builder. Simple and quick — <b>best for small jobs</b>.</p>
+            </div>
+            <div class="f-card">
+                <span class="emoji">🚶‍♂️🚶‍♀️</span>
+                <h3>One by one</h3>
+                <p>Finish each task fully before the next. Careful and tidy — <b>best for step-by-step work</b>.</p>
+            </div>
+            <div class="f-card">
+                <span class="emoji">⚡</span>
+                <h3>Parallel teams</h3>
+                <p>Independent tasks run at the same time. <b>Fastest for big jobs</b> with many moving parts.</p>
+            </div>
+        </div>
+        <p class="note center fill reveal reveal-delay-3">Agent Loop works out the safe order — you just pick the style.</p>
+    </div>
+    <span class="slide-number">10 / 18</span>
+</section>
+
+<!-- ==================== 11 · STEP 5 CHECK (GATES) ==================== -->
+<section class="slide" id="slide-11">
+    <div class="orb orb--primary" style="bottom:-12%; right:4%;"></div>
+    <div class="slide-content">
+        <span class="kicker reveal">Step 5 · Check</span>
+        <h2 class="reveal reveal-delay-1">Every change gets inspected — twice</h2>
+        <div class="gates reveal reveal-delay-2">
+            <div class="gate-row"><span class="gate-badge a">A</span><div class="gate-text"><div class="gate-title">First review</div><div class="gate-desc">An inspector checks the new code right after it's built.</div></div></div>
+            <div class="gate-connector">&darr;</div>
+            <div class="gate-row"><span class="gate-badge b">B</span><div class="gate-text"><div class="gate-title">Fresh second opinion</div><div class="gate-desc">A new inspector looks again — with <b>no memory</b> of the build. A true outside view.</div></div></div>
+            <div class="gate-connector">&darr;</div>
+            <div class="gate-row"><span class="gate-badge ok">✓</span><div class="gate-text"><div class="gate-title">Sign-off</div><div class="gate-desc">Both sides agree it's good. If they disagree, a neutral third inspector settles it.</div></div></div>
+        </div>
+        <div class="analogy reveal reveal-delay-3">
+            <span class="a-icon">💡</span>
+            <p><b>Like a fresh pair of eyes on an essay</b> — the writer misses what a brand-new reader instantly catches.</p>
+        </div>
+    </div>
+    <span class="slide-number">11 / 18</span>
+</section>
+
+<!-- ==================== 12 · THE HEARTBEAT (SUPERVISOR LOOP) ==================== -->
+<section class="slide" id="slide-12">
+    <div class="slide-content">
+        <span class="kicker reveal">The heartbeat</span>
+        <h2 class="reveal reveal-delay-1">Build &rarr; check &rarr; fix, on repeat</h2>
+        <p class="lead reveal reveal-delay-2">The Supervisor watches every round and makes the call — so the loop never spins forever.</p>
+        <div class="diagram row center-x reveal reveal-delay-2" style="gap: clamp(0.5rem,1.4vw,1rem);">
+            <div class="loop-bracket">
+                <span class="loop-label">↻ one round — repeats</span>
+                <span class="node node--primary"><span class="emoji">🛠️</span> Build</span>
+                <span class="arrow">&rarr;</span>
+                <span class="node node--amber"><span class="emoji">👀</span> Check</span>
+            </div>
+            <span class="arrow">&rarr;</span>
+            <span class="node node--purple"><span class="emoji">🧑‍💼</span> Supervisor decides</span>
+        </div>
+        <div class="decisions reveal reveal-delay-3">
+            <div class="decision ship"><div class="d-head"><span>✅</span> Ship it</div><div class="d-desc">Looks good — move on.</div></div>
+            <div class="decision fix"><div class="d-head"><span>🔁</span> Fix it</div><div class="d-desc">Issues found — try again.</div></div>
+            <div class="decision swap"><div class="d-head"><span>🔀</span> Swap roles</div><div class="d-desc">Same problem twice? Builder &amp; inspector switch seats.</div></div>
+            <div class="decision stop"><div class="d-head"><span>🛑</span> Stop</div><div class="d-desc">Going nowhere — pause and tell you.</div></div>
+        </div>
+    </div>
+    <span class="slide-number">12 / 18</span>
+</section>
+
+<!-- ==================== 13 · AUTO-FIX LOOP ==================== -->
+<section class="slide" id="slide-13">
+    <div class="orb orb--amber" style="top:-10%; left:6%;"></div>
+    <div class="slide-content">
+        <span class="kicker reveal">Self-correction</span>
+        <h2 class="reveal reveal-delay-1">Failed the test? It tries again — by itself</h2>
+        <p class="lead reveal reveal-delay-2">
+            When a test fails, Agent Loop feeds the <b>exact feedback</b> back in and retries automatically.
+            No copy-pasting error messages back to it.
+        </p>
+        <div class="diagram row center-x reveal reveal-delay-2" style="gap: clamp(0.3rem,1vw,0.7rem); margin: 0.3rem 0;">
+            <span class="node node--primary"><span class="emoji">🛠️</span> Build</span>
+            <span class="arrow">&rarr;</span>
+            <span class="node node--red"><span class="emoji">✅</span> Test <b>✕</b></span>
+            <span class="arrow">&rarr;</span>
+            <span class="node node--amber"><span class="emoji">📝</span> Read the feedback</span>
+            <span class="arrow">&rarr;</span>
+            <span class="node node--primary"><span class="emoji">🛠️</span> Build again</span>
+            <span class="arrow">&rarr;</span>
+            <span class="node node--green"><span class="emoji">✅</span> Test <b>✓</b></span>
+        </div>
+        <div class="analogy reveal reveal-delay-3">
+            <span class="a-icon">💡</span>
+            <p><b>Like a student who reads the teacher's red marks and revises</b> — instead of handing in the same draft again.</p>
+        </div>
+    </div>
+    <span class="slide-number">13 / 18</span>
+</section>
+
+<!-- ==================== 14 · KNOWS WHEN STUCK ==================== -->
+<section class="slide" id="slide-14">
+    <div class="slide-content">
+        <span class="kicker reveal">Safety nets</span>
+        <h2 class="reveal reveal-delay-1">It raises its hand instead of spinning</h2>
+        <p class="lead reveal reveal-delay-2">A good worker speaks up when they're stuck. Agent Loop watches for three warning signs:</p>
+        <div class="cards cards--4 reveal reveal-delay-2">
+            <div class="f-card"><span class="emoji">🔁</span><h3>Going in circles</h3><p>Keeps making the same change over and over.</p></div>
+            <div class="f-card"><span class="emoji">🧊</span><h3>No progress</h3><p>Nothing actually changed this round.</p></div>
+            <div class="f-card"><span class="emoji">⏰</span><h3>Taking too long</h3><p>It's been working past a sensible time limit.</p></div>
+            <div class="f-card"><span class="emoji">🧠</span><h3>Remembers lessons</h3><p>Writes down what it learned and applies it next time.</p></div>
+        </div>
+        <p class="note center fill reveal reveal-delay-3">When stuck, it <b>warns you or stops safely</b> — rather than burning time (and money) going nowhere.</p>
+    </div>
+    <span class="slide-number">14 / 18</span>
+</section>
+
+<!-- ==================== 15 · PAUSE & RESUME ==================== -->
+<section class="slide" id="slide-15">
+    <div class="orb orb--primary" style="bottom:-10%; left:8%;"></div>
+    <div class="slide-content">
+        <span class="kicker reveal">Never lose work</span>
+        <h2 class="reveal reveal-delay-1">Pause anytime. Pick up right where you left off.</h2>
+        <p class="lead reveal reveal-delay-2">
+            Every step is written down as it happens — the plan, the checklist, the tasks, what passed or failed,
+            and the decisions made along the way.
+        </p>
+        <div class="diagram row center-x reveal reveal-delay-2" style="gap: clamp(0.5rem,1.5vw,1.1rem); margin: 0.3rem 0;">
+            <div class="f-card" style="min-width: clamp(190px,32vw,320px);">
+                <div class="tag-top">🗂️ The logbook</div>
+                <ul class="checklist" style="gap: 0.2rem;">
+                    <li>The plan &amp; checklist</li>
+                    <li>The task list &amp; progress</li>
+                    <li>What passed / what failed</li>
+                    <li>Lessons &amp; decisions</li>
+                </ul>
+            </div>
+            <span class="node node--green" style="font-size: clamp(0.85rem,1.7vw,1.2rem);"><span class="emoji">⏸️</span> &rarr; <span class="emoji">▶️</span> Resume</span>
+        </div>
+        <div class="analogy reveal reveal-delay-3">
+            <span class="a-icon">💡</span>
+            <p><b>Like a video-game autosave:</b> close your laptop mid-task and continue later — same place, same context. It doubles as a full paper trail you can audit.</p>
+        </div>
+    </div>
+    <span class="slide-number">15 / 18</span>
+</section>
+
+<!-- ==================== 16 · UNDER THE HOOD ==================== -->
+<section class="slide" id="slide-16">
+    <div class="slide-content">
+        <span class="kicker reveal">Under the hood</span>
+        <h2 class="reveal reveal-delay-1">How it actually runs the AIs (the simple version)</h2>
+        <div class="diagram row center-x reveal reveal-delay-2" style="gap: clamp(0.4rem,1.2vw,0.9rem); margin: 0.2rem 0;">
+            <span class="node node--purple"><span class="emoji">🧑‍💼</span> Agent Loop <span class="note" style="font-weight:600;">(the manager)</span></span>
+            <span class="arrow">&rarr; gives a task &rarr;</span>
+            <span class="node node--primary"><span class="emoji">🤖</span> An AI assistant</span>
+            <span class="arrow">&rarr; returns the work &rarr;</span>
+            <span class="node node--green"><span class="emoji">📦</span> Next step</span>
+        </div>
+        <div class="cards cards--2 reveal reveal-delay-3">
+            <div class="f-card"><h3>🔒 Stays on your machine</h3><p>It runs right inside your project folder. Your code never leaves.</p></div>
+            <div class="f-card"><h3>🔌 Uses tools you already have</h3><p>No new accounts to set up — it drives the AI tools already installed.</p></div>
+            <div class="f-card"><h3>🧱 Easy to extend</h3><p>Want to add a new AI later? It just plugs in — nothing else changes.</p></div>
+            <div class="f-card"><h3>🧑‍💼 Always supervised</h3><p>The manager hands out work and collects results — like a foreman with a crew.</p></div>
+        </div>
+    </div>
+    <span class="slide-number">16 / 18</span>
+</section>
+
+<!-- ==================== 17 · SETTINGS ==================== -->
+<section class="slide" id="slide-17">
+    <div class="orb orb--amber" style="top:-8%; right:10%;"></div>
+    <div class="slide-content">
+        <span class="kicker reveal">Settings</span>
+        <h2 class="reveal reveal-delay-1">Set the rules once — change them anytime</h2>
+        <p class="lead reveal reveal-delay-2">
+            Choose your team, how many retries to allow, whether to auto-save progress. Set sensible defaults once,
+            then override them whenever you need. <b>The more specific setting always wins.</b>
+        </p>
+        <div class="layers reveal reveal-delay-2" style="margin: 0.2rem auto 0;">
+            <div class="layer l1"><span class="l-emoji">📁</span><div><div class="l-name">Project defaults</div><div class="l-desc">Your baseline — set it and forget it.</div></div></div>
+            <div class="layer l2"><span class="l-emoji">🏢</span><div><div class="l-name">Team / automation settings</div><div class="l-desc">Override for shared or automated runs.</div></div></div>
+            <div class="layer l3"><span class="l-emoji">🎚️</span><div><div class="l-name">Per-run tweaks</div><div class="l-desc">Nudge a single run without touching the rest.</div></div></div>
+        </div>
+        <div class="analogy reveal reveal-delay-3">
+            <span class="a-icon">💡</span>
+            <p><b>Like a thermostat:</b> a comfortable default setting that you can nudge any time. The desktop app even gives you a friendly settings screen.</p>
+        </div>
+    </div>
+    <span class="slide-number">17 / 18</span>
+</section>
+
+<!-- ==================== 19 · SIMPLE VS NOT SIMPLE ==================== -->
+<section class="slide" id="slide-scale">
+    <div class="orb orb--primary" style="top:-12%; right:4%;"></div>
+    <div class="slide-content">
+        <span class="kicker reveal">Right-sized process</span>
+        <h2 class="reveal reveal-delay-1">A small fix or a big project? It scales to fit.</h2>
+        <p class="lead reveal reveal-delay-2">You don't run the whole machine for a one-line change. Agent Loop dials the process up or down to match the job in front of it.</p>
+        <div class="compare reveal reveal-delay-2">
+            <div class="compare-card simple">
+                <h3><span>⚡</span> Simple job</h3>
+                <p style="font-size:var(--small-size); color:var(--ink-soft);">A small, clear change — low risk, one obvious path.</p>
+                <div class="mini-flow">
+                    <span class="mini-node">🛠️ Build</span><span class="mini-arrow">&rarr;</span>
+                    <span class="mini-node">✅ Check</span>
+                </div>
+                <p class="note"><b>One assistant · minutes · light touch</b></p>
+                <p class="note">e.g. fix a bug · tweak a label · add one small endpoint</p>
+            </div>
+            <div class="compare-card complex">
+                <h3><span>🏗️</span> Not-so-simple job</h3>
+                <p style="font-size:var(--small-size); color:var(--ink-soft);">A big feature with many moving parts and higher stakes.</p>
+                <div class="mini-flow">
+                    <span class="mini-node">🔍</span><span class="mini-arrow">&rarr;</span>
+                    <span class="mini-node">📋</span><span class="mini-arrow">&rarr;</span>
+                    <span class="mini-node">🗺️</span><span class="mini-arrow">&rarr;</span>
+                    <span class="mini-node">🛠️</span><span class="mini-arrow">&rarr;</span>
+                    <span class="mini-node">👀</span><span class="mini-arrow">&rarr;</span>
+                    <span class="mini-node">✅</span><span class="mini-arrow">&rarr;</span>
+                    <span class="mini-node">🔁</span>
+                </div>
+                <p class="note"><b>Several assistants · full paper trail · more checkpoints</b></p>
+                <p class="note">e.g. billing · API redesign · data migration</p>
+            </div>
+        </div>
+        <div class="analogy reveal reveal-delay-3">
+            <span class="a-icon">💡</span>
+            <p><b>Same team, same tools</b> — you just choose how much process the job deserves. The full pipeline is there when you need it, and out of the way when you don't.</p>
+        </div>
+    </div>
+    <span class="slide-number">19 / 20</span>
+</section>
+
+<!-- ==================== 20 · WHERE IT LIVES + START ==================== -->
+<section class="slide hero-green" id="slide-18">
+    <div class="orb orb--primary" style="bottom:-12%; right:8%;"></div>
+    <div class="orb orb--amber" style="top:-10%; left:8%;"></div>
+    <div class="bnp-stars" aria-hidden="true">
+        <span class="bnp-star" style="top:12%; left:6%;  font-size:2.6rem; opacity:0.82;">✦</span>
+        <span class="bnp-star" style="top:25%; left:13%; font-size:1.5rem; opacity:0.5;">✦</span>
+        <span class="bnp-star" style="top:36%; left:19%; font-size:0.95rem; opacity:0.32;">✦</span>
+        <span class="bnp-star" style="top:68%; left:88%; font-size:1.1rem; opacity:0.4;">✦</span>
+        <span class="bnp-star" style="top:80%; left:93%; font-size:2.2rem; opacity:0.72;">✦</span>
+    </div>
+    <div class="slide-content" style="align-items:center; text-align:center;">
+        <span class="kicker reveal">Get started</span>
+        <h2 class="reveal reveal-delay-1">Three ways to use it</h2>
+        <div class="cards cards--3 reveal reveal-delay-2 fill">
+            <div class="f-card" style="align-items:center; text-align:center;"><span class="emoji">⌨️</span><h3>Command line</h3><p>A fast, no-frills tool for the terminal.</p></div>
+            <div class="f-card" style="align-items:center; text-align:center;"><span class="emoji">🖥️</span><h3>Desktop app</h3><p>A visual workbench — watch the work happen live.</p></div>
+            <div class="f-card" style="align-items:center; text-align:center;"><span class="emoji">🧩</span><h3>VS Code</h3><p>Built into the editor your developers already use.</p></div>
+        </div>
+        <div class="analogy reveal reveal-delay-3" style="max-width: 70ch; text-align:left;">
+            <span class="a-icon">🎯</span>
+            <p><b>The one-line mental model:</b> describe what you want &rarr; the team researches, plans, builds, and double-checks it &rarr; you get working, reviewed code.</p>
+        </div>
+        <p class="note reveal reveal-delay-4">github.com/agent-loop</p>
+    </div>
+    <span class="slide-number">18 / 18</span>
+</section>
+
+</main>
+
+<script>
+/* =========================================
+   PRESENTATION CONTROLLER
+   keyboard · wheel · touch · reveal · progress
+   ========================================= */
+class PresentationController {
+    constructor() {
+        this.slides = document.querySelectorAll('.slide');
+        this.total = this.slides.length;
+        this.current = 0;
+        this.isScrolling = false;
+
+        this.initKeyboard();
+        this.initWheel();
+        this.initTouch();
+        this.initObserver();
+        this.numberSlides();
+        this.updateProgress();
+    }
+
+    /* Auto-number slides so inserting/removing a slide never desyncs the labels */
+    numberSlides() {
+        const pad = (n) => String(n).padStart(2, '0');
+        this.slides.forEach((slide, i) => {
+            const el = slide.querySelector('.slide-number');
+            if (el) el.textContent = pad(i + 1) + ' / ' + pad(this.total);
+        });
+    }
+
+    goTo(index) {
+        if (index < 0 || index >= this.total) return;
+        this.current = index;
+        this.slides[index].scrollIntoView({ behavior: 'smooth' });
+        this.updateProgress();
+    }
+    next() { this.goTo(this.current + 1); }
+    prev() { this.goTo(this.current - 1); }
+
+    updateProgress() {
+        const pct = ((this.current + 1) / this.total) * 100;
+        document.getElementById('progress').style.width = pct + '%';
+    }
+
+    initKeyboard() {
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowDown' || e.key === 'ArrowRight' || e.key === ' ') {
+                e.preventDefault(); this.next();
+            } else if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') {
+                e.preventDefault(); this.prev();
+            } else if (e.key === 'Home') {
+                e.preventDefault(); this.goTo(0);
+            } else if (e.key === 'End') {
+                e.preventDefault(); this.goTo(this.total - 1);
+            }
+        });
+    }
+
+    initWheel() {
+        let timeout;
+        document.addEventListener('wheel', (e) => {
+            if (this.isScrolling) return;
+            this.isScrolling = true;
+            if (e.deltaY > 30) this.next();
+            else if (e.deltaY < -30) this.prev();
+            clearTimeout(timeout);
+            timeout = setTimeout(() => { this.isScrolling = false; }, 800);
+        }, { passive: true });
+    }
+
+    initTouch() {
+        let startY = 0;
+        document.addEventListener('touchstart', (e) => { startY = e.touches[0].clientY; }, { passive: true });
+        document.addEventListener('touchend', (e) => {
+            const dy = startY - e.changedTouches[0].clientY;
+            if (Math.abs(dy) > 50) { dy > 0 ? this.next() : this.prev(); }
+        }, { passive: true });
+    }
+
+    initObserver() {
+        const revealObs = new IntersectionObserver((entries) => {
+            entries.forEach(entry => { if (entry.isIntersecting) entry.target.classList.add('visible'); });
+        }, { threshold: 0.15 });
+        document.querySelectorAll('.reveal').forEach(el => revealObs.observe(el));
+
+        const slideObs = new IntersectionObserver((entries) => {
+            entries.forEach(entry => {
+                if (entry.isIntersecting) {
+                    const idx = Array.from(this.slides).indexOf(entry.target);
+                    if (idx !== -1) { this.current = idx; this.updateProgress(); }
+                }
+            });
+        }, { threshold: 0.5 });
+        this.slides.forEach(s => slideObs.observe(s));
+    }
+}
+document.addEventListener('DOMContentLoaded', () => new PresentationController());
+</script>
+</body>
+</html>
