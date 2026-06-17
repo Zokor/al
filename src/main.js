@@ -68,7 +68,12 @@ export async function runMain({
       stderr.write(`Interrupted: ${error.message ?? "interrupted"}\n`);
       return 130;
     }
-    stderr.write(`${error.message ?? error}\n`);
+    const message = String(error.message ?? error);
+    if (jsonRequested) {
+      stderr.write(`${JSON.stringify({ type: "error", data: { message } })}\n`);
+    } else {
+      stderr.write(`${message}\n`);
+    }
     return 1;
   } finally {
     process.removeListener("SIGINT", onSigint);

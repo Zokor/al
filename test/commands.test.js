@@ -30,7 +30,7 @@ test("status reports uninitialized without status.json", async () => {
 
 test("config warnings reach stderr in plain and json modes", async () => {
   const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
-  await writeFile(resolve(project, ".agent-loop.toml"), "[models.future_provider.plan]\nmodel = \"future\"\n");
+  await writeFile(resolve(project, ".agent-loop.json"), JSON.stringify({ models: { future_provider: { plan: { model: "future" } } } }));
   const plain = await run(["status"], project);
   assert.equal(plain.code, 0);
   assert.match(plain.stderr, /^warning: Unknown provider 'future_provider'/m);
@@ -39,6 +39,21 @@ test("config warnings reach stderr in plain and json modes", async () => {
   const warningLine = json.stderr.trim().split(/\r?\n/)[0];
   assert.deepEqual(JSON.parse(warningLine).type, "warning");
   assert.match(JSON.parse(warningLine).data.message, /Unknown provider 'future_provider'/);
+});
+
+test("fatal config errors are plain text normally and JSON events in --json mode", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  await writeFile(resolve(project, ".agent-loop.json"), "{not json");
+  const plain = await run(["status"], project);
+  assert.equal(plain.code, 1);
+  assert.equal(plain.stdout, "");
+  assert.match(plain.stderr, /^\.agent-loop\.json is not valid JSON \(/);
+  const json = await run(["status", "--json"], project);
+  assert.equal(json.code, 1);
+  assert.equal(json.stdout, "");
+  const errorLine = JSON.parse(json.stderr.trim());
+  assert.equal(errorLine.type, "error");
+  assert.match(errorLine.data.message, /\.agent-loop\.json is not valid JSON \(/);
 });
 
 test("plan initializes state and does not create tasks.md", async () => {
@@ -55,7 +70,7 @@ test("tasks fails without a plan and initializes decompose when plan exists", as
   const missing = await run(["tasks"], project);
   assert.equal(missing.code, 1);
   assert.match(missing.stderr, /No plan found/);
-  await writeFile(resolve(project, ".agent-loop.toml"), "implementer = \"codex\"\nreviewer = \"codex\"\n");
+  await writeFile(resolve(project, ".agent-loop.json"), JSON.stringify({ implementer: "codex", reviewer: "codex" }));
   await run(["plan", "Build"], project);
   await writeFile(resolve(project, ".agent-loop/state/plan.md"), "Plan body");
   await writeFile(resolve(project, ".agent-loop/state/tasks.md"), "stale");
