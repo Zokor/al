@@ -21,6 +21,13 @@ function prependSystemPrompt(args, systemPrompt) {
   }
 }
 
+function prependPromptFlagValue(args, flag, systemPrompt) {
+  const index = args.indexOf(flag);
+  if (systemPrompt && index !== -1 && index + 1 < args.length) {
+    args[index + 1] = `${systemPrompt}\n\n${args[index + 1]}`;
+  }
+}
+
 function insertBeforeLast(args, values) {
   args.splice(Math.max(0, args.length - 1), 0, ...values);
 }
@@ -53,12 +60,23 @@ export const AGENT_PROVIDER_PLUGINS = Object.freeze({
       }
     },
     injectPermissionFlags(args, { config, role }) {
-      if (["supervisor", "discoverer", "debugger"].includes(role)) {
+      if (role === "planner" && config.plannerPermissionMode === "plan") {
+        args.push("--permission-mode", "plan");
+      } else if (["supervisor", "discoverer", "debugger"].includes(role)) {
         args.push("--allowedTools", config.reviewerAllowedTools ?? READ_ONLY_CLAUDE_TOOLS);
       } else if (config.claudeFullAccess !== false) {
         args.push("--dangerously-skip-permissions");
       } else {
-        args.push("--allowedTools", config.claudeAllowedTools ?? "Bash,Read,Edit,Write,Grep,Glob,WebFetch");
+        let tools = ["reviewer", "verifier", "debugger"].includes(role)
+          ? (config.reviewerAllowedTools ?? READ_ONLY_CLAUDE_TOOLS)
+          : (config.claudeAllowedTools ?? "Bash,Read,Edit,Write,Grep,Glob,WebFetch");
+        if (config.skillsEnabled !== false && !["reviewer", "supervisor", "verifier", "debugger", "discoverer"].includes(role)) {
+          tools += ",Skill";
+        }
+        args.push("--allowedTools", tools);
+      }
+      if (config.skillsEnabled === false) {
+        args.push("--disable-slash-commands");
       }
     },
     configureEnv({ config, effort }) {
@@ -117,7 +135,9 @@ export const AGENT_PROVIDER_PLUGINS = Object.freeze({
       }
       return args;
     },
-    injectSystemPrompt: prependSystemPrompt,
+    injectSystemPrompt(args, systemPrompt) {
+      prependPromptFlagValue(args, "-p", systemPrompt);
+    },
     injectPermissionFlags(args, { role }) {
       args.push("--no-ask-user", "--autopilot");
       if (["supervisor", "reviewer", "verifier", "discoverer", "debugger", "planner"].includes(role)) {
@@ -206,6 +226,9 @@ export const AGENT_PROVIDER_PLUGINS = Object.freeze({
         args.push("-m", model);
       }
       return args;
+    },
+    injectSystemPrompt(args, systemPrompt) {
+      prependPromptFlagValue(args, "-p", systemPrompt);
     },
   },
   vibe: {

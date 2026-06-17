@@ -18,6 +18,8 @@ export const DispatchKind = Object.freeze({
   Review: "Review",
   Goal: "Goal",
   Queue: "Queue",
+  Pipeline: "Pipeline",
+  Supervise: "Supervise",
   ListAgents: "ListAgents",
   Init: "Init",
   Completions: "Completions",
@@ -37,6 +39,8 @@ const AGENT_RUNTIME_DISPATCHES = new Set([
   DispatchKind.Inline,
   DispatchKind.Chain,
   DispatchKind.Review,
+  DispatchKind.Pipeline,
+  DispatchKind.Supervise,
   DispatchKind.Unsupported,
 ]);
 

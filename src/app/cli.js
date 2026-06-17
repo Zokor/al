@@ -2,9 +2,15 @@ import { formatHelpText, helpEvent } from "./help.js";
 import { formatVersionText, versionEvent } from "./version.js";
 import { UNSUPPORTED_COMMAND_SET } from "../unsupported/commands.js";
 import { COMPLETION_SHELLS } from "./completionSurface.js";
-import { PIPELINE_ALIAS_DEFINITIONS } from "./pipelineAliases.js";
+import {
+  IMPLEMENTATION_WORKFLOW_COMMANDS,
+  IMPLEMENTATION_WORKFLOW_DEFINITIONS,
+  PIPELINE_ALIAS_COMMANDS,
+  PIPELINE_ALIAS_DEFINITIONS,
+} from "./pipelineAliases.js";
 
-const SUPPORTED_COMMANDS = new Set(["status", "reset", "spec", "analyze-coverage", "plan", "tasks", "next", "resume", "verify", "discuss", "implement", "implement-verify", "review", "inline", "chain", "goal", "queue", "version", "list-agents", "init", "completions", "approve", "reject"]);
+const BASE_SUPPORTED_COMMANDS = ["status", "reset", "spec", "analyze-coverage", "plan", "tasks", "next", "resume", "verify", "discuss", "implement", "implement-verify", "review", "inline", "chain", "goal", "queue", "pipeline", "supervise", "version", "list-agents", "init", "completions", "approve", "reject"];
+const SUPPORTED_COMMANDS = new Set([...BASE_SUPPORTED_COMMANDS, ...PIPELINE_ALIAS_COMMANDS, ...IMPLEMENTATION_WORKFLOW_COMMANDS]);
 const POSITIONAL_COMMANDS = new Set(["spec", "plan", "review", "goal", "queue", "approve", "reject"]);
 const GOAL_LIFECYCLE_COMMANDS = new Set(["status", "pause", "resume", "clear"]);
 const QUEUE_COMMANDS = new Set(["add", "list", "status", "pause", "resume", "cancel"]);
@@ -181,6 +187,10 @@ function normalizeGlobals(globals) {
 }
 
 function parseCommandArgs(command, args) {
+  if (command === "pipeline" || command === "supervise" || PIPELINE_ALIAS_COMMANDS.has(command) || IMPLEMENTATION_WORKFLOW_COMMANDS.has(command)) {
+    return parseStructuredUnsupportedArgs(command, args);
+  }
+
   const result = { positional: [] };
   if (isImplementCommand(command)) {
     result.flags = defaultImplementFlags();
@@ -316,6 +326,19 @@ function unsupportedArgSpec(command) {
       kind: "pipelineAlias",
     };
   }
+  const workflow = IMPLEMENTATION_WORKFLOW_DEFINITIONS[command];
+  if (workflow) {
+    return {
+      ...workflow,
+      allowDiscover: workflow.phases.startsWith("plan,"),
+      allowFile: true,
+      allowResume: true,
+      allowSingleAgent: true,
+      requireTaskUnlessResume: workflow.taskStyle === "positional",
+      allowPerTaskResume: true,
+      kind: "implementationWorkflow",
+    };
+  }
   switch (command) {
     case "implement":
       return {
@@ -339,29 +362,6 @@ function unsupportedArgSpec(command) {
         allowPerTaskResume: false,
         kind: "implementVerify",
       };
-    case "plan-tasks-implement":
-    case "plan-implement":
-      return {
-        taskStyle: "positional",
-        allowDiscover: true,
-        allowFile: true,
-        allowResume: true,
-        allowSingleAgent: true,
-        implementFlags: true,
-        requireTaskUnlessResume: true,
-        allowPerTaskResume: true,
-        kind: command,
-      };
-    case "tasks-implement":
-      return {
-        taskStyle: "none",
-        allowFile: true,
-        allowResume: true,
-        allowSingleAgent: true,
-        implementFlags: true,
-        allowPerTaskResume: true,
-        kind: "tasksImplement",
-      };
     case "pipeline":
       return {
         taskStyle: "option",
@@ -370,6 +370,7 @@ function unsupportedArgSpec(command) {
         allowResume: true,
         allowSingleAgent: true,
         allowPhases: true,
+        allowTaskFileCombo: true,
         requirePhases: true,
         implementFlags: true,
         allowPerTaskResume: true,
@@ -525,6 +526,14 @@ function parseUnsupportedPositional(spec, result, token, command) {
     result.positional.push(token);
     return;
   }
+  if (spec.allowPositionalTask) {
+    if (result.task !== undefined) {
+      throw new ParseError(`unexpected argument '${token}' for ${command}`);
+    }
+    result.task = token;
+    result.positional.push(token);
+    return;
+  }
   if (spec.taskStyle !== "positional") {
     throw new ParseError(`unexpected argument '${token}' for ${command}`);
   }
@@ -552,7 +561,7 @@ function validateStructuredUnsupportedArgs(command, spec, result) {
   if (spec.requirePhases && !result.phases) {
     throw new ParseError("missing value for --phases");
   }
-  if (result.task !== undefined && result.file !== undefined) {
+  if (!spec.allowTaskFileCombo && result.task !== undefined && result.file !== undefined) {
     throw new ParseError("task and --file cannot be used together.");
   }
   if (result.resume && (result.task !== undefined || result.file !== undefined)) {

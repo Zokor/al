@@ -71,6 +71,10 @@ function resolvedModel(config, { action, provider, profileSegment }) {
   if (cliOverride) {
     return cliOverride.value;
   }
+  const envOverride = config.envActionOverrides?.[action];
+  if (envOverride && Object.hasOwn(envOverride, "model")) {
+    return envOverride.model;
+  }
   const modelEntry = config.models?.[provider]?.[action];
   if (modelEntry && Object.hasOwn(modelEntry, "model")) {
     return modelEntry.model;
@@ -82,6 +86,10 @@ function resolvedEffort(config, { action, provider, profileSegment }) {
   const cliOverride = lastActionOverride(config, action, "effort");
   if (cliOverride) {
     return cliOverride.value;
+  }
+  const envOverride = config.envActionOverrides?.[action];
+  if (envOverride && Object.hasOwn(envOverride, "effort")) {
+    return envOverride.effort;
   }
   const modelEntry = config.models?.[provider]?.[action];
   if (modelEntry && Object.hasOwn(modelEntry, "effort")) {

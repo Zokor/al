@@ -1,16 +1,19 @@
 import { access, readFile, rm } from "node:fs/promises";
 import { relative, resolve } from "node:path";
 import { runAgentInvocation } from "../../agent/runtime.js";
-import { resolveRuntimeQualityCommands } from "../../config/qualityCommands.js";
+import { resolveRuntimeBrowserTestCommands, resolveRuntimeQualityCommands } from "../../config/qualityCommands.js";
+import { BROWSER_EVIDENCE_GATE_FILENAME, browserEvidenceGateAssessment, browserEvidenceGateReport, browserEvidenceGateSummary } from "../browserEvidence.js";
 import { runCheckCommands } from "../checkCommands.js";
 import { loadConfig } from "../../config/index.js";
 import { appendEvent } from "../../state/events.js";
-import { appendStateFile, readJsonStateFile, readStateFile, safeStatePath, writeStateFile } from "../../state/files.js";
+import { appendStateFile, readJsonStateFile, readStateFile, removeStateFile, safeStatePath, writeStateFile } from "../../state/files.js";
 import { initializeWorkflowState, resetStateDir } from "../../state/initialization.js";
 import { writeStatus } from "../../state/status.js";
 import { assertNoActiveWaveLock } from "../../state/waveLock.js";
+import { writePipelineResumeState } from "../../workflow/pipelineResumeState.js";
 
 const CONTINUE_IMPLEMENTATION = Symbol("continue implementation");
+const IMPLEMENTATION_HIGH_WATERMARK_LOG = "⚠ High round count in unlimited mode — timeout and stuck detection remain active safeguards";
 
 export async function runImplement(cli, context) {
   const started = Date.now();
@@ -24,6 +27,9 @@ export async function runImplement(cli, context) {
     await assertNoActiveWaveLock(config);
     if (cli.commandArgs.resume) {
       return runImplementResume(cli, context, config);
+    }
+    if (cli.commandArgs.pipelineContinue) {
+      return runPipelineImplementContinue(cli, context, config);
     }
 
     const existingPlan = await readStateFile(config, "plan.md");
@@ -40,6 +46,9 @@ export async function runImplement(cli, context) {
     if (existingPlan.trim()) {
       await writeStateFile(config, "plan.md", existingPlan);
     }
+    if (cli.commandArgs.pipelineResumeStateArgs) {
+      await writePipelineResumeState(config, cli.commandArgs.pipelineResumeStateArgs);
+    }
 
     const outcome = await runImplementRoundOne(config, {
       runner: context.agentRunner,
@@ -47,7 +56,9 @@ export async function runImplement(cli, context) {
     });
     return outcome;
   } finally {
-    emitImplementElapsed(config, context.stdout, Date.now() - started);
+    if (!cli.commandArgs.pipelineStart && !cli.commandArgs.pipelineContinue) {
+      emitImplementElapsed(config, context.stdout, Date.now() - started);
+    }
   }
 }
 
@@ -98,6 +109,19 @@ async function runImplementResume(cli, context, config) {
   }
 
   await appendEvent(config, { type: "command_started", data: { command: "implement" } });
+  return runImplementRoundOne(config, {
+    runner: context.agentRunner,
+    stderr: context.stderr,
+  });
+}
+
+async function runPipelineImplementContinue(cli, context, config) {
+  await writeStateFile(config, "workflow.txt", "implement\n");
+  await writeStatus({ status: "PENDING", round: 0, workflow: "implement" }, config);
+  await removeStateFile(config, "quality_checks.md");
+  await appendEvent(config, { type: "command_started", data: { command: "implement" } });
+  await writeStateFile(config, "implement-mode.txt", "batch\n");
+  await writeStateFile(config, "implement-flags.json", `${JSON.stringify(implementFlagsForState(cli.commandArgs.flags), null, 2)}\n`);
   return runImplementRoundOne(config, {
     runner: context.agentRunner,
     stderr: context.stderr,
@@ -160,6 +184,9 @@ async function pathExists(path) {
 async function resolveImplementTask(projectDir, commandArgs, config, { stdout, existingPlan }) {
   if (commandArgs.task !== undefined || commandArgs.file) {
     return readImplementTask(projectDir, commandArgs);
+  }
+  if (commandArgs.pipelineStart) {
+    throw new Error("Config error: Task is required. Provide task text or --file <path>.");
   }
   return readImplementTaskFromState(config, { stdout, existingPlan });
 }
@@ -262,7 +289,7 @@ function implementFlagsForState(flags = {}) {
 async function runImplementRoundOne(config, { runner, stderr }) {
   const maxRounds = config.reviewMaxRounds ?? 0;
   for (let round = 1; ; round += 1) {
-    const outcome = await runImplementRound(config, { runner, round });
+    const outcome = await runImplementRound(config, { runner, round, maxRounds });
     if (outcome.kind === "exit") {
       return outcome.code;
     }
@@ -276,7 +303,7 @@ async function runImplementRoundOne(config, { runner, stderr }) {
       return approved;
     }
     if (status.status === "NEEDS_CHANGES") {
-      const retry = await handleRetryableNeedsChanges(config, round, status, { maxRounds, stderr });
+      const retry = await handleRetryableNeedsChanges(config, round, status, { maxRounds });
       if (retry === CONTINUE_IMPLEMENTATION) {
         continue;
       }
@@ -290,9 +317,12 @@ async function runImplementRoundOne(config, { runner, stderr }) {
   }
 }
 
-async function runImplementRound(config, { runner, round }) {
+async function runImplementRound(config, { runner, round, maxRounds }) {
   if (round === 1) {
     await appendLog(config, "Implementation Phase");
+  }
+  if (shouldEmitHighWatermark(round, maxRounds)) {
+    await appendLog(config, IMPLEMENTATION_HIGH_WATERMARK_LOG);
   }
   await appendLog(config, `Round ${round}`);
   await writeStatus({ status: "IMPLEMENTING", round, reason: "Implementation in progress", workflow: "implement" }, config);
@@ -316,8 +346,14 @@ async function runImplementRound(config, { runner, round }) {
   }
 
   await appendRoundProgress(config, round, `Implementation: Round ${round} complete`);
-  const qualityOutcome = await runImplementationQualityChecks(config);
-  const qualityEvidenceAvailable = Boolean(qualityOutcome);
+  const qualityGates = await runImplementationQualityGates(config, round);
+  if (qualityGates.kind === "exit") {
+    return { kind: "exit", code: qualityGates.code };
+  }
+  if (qualityGates.status) {
+    return { kind: "status", status: qualityGates.status, qualityEvidenceAvailable: qualityGates.qualityEvidenceAvailable };
+  }
+  const { qualityEvidenceAvailable } = qualityGates;
   await writeStatus(
     { status: "REVIEWING", round, reason: "Gate A: Awaiting same-context reviewer gate", workflow: "implement" },
     config,
@@ -345,6 +381,10 @@ async function runImplementRound(config, { runner, round }) {
   const status = await readReviewerStatus(config, round);
   await appendRoundProgress(config, round, reviewProgressSummary(status));
   return { kind: "status", status, qualityEvidenceAvailable };
+}
+
+function shouldEmitHighWatermark(round, maxRounds) {
+  return maxRounds <= 0 && round >= 50 && (round - 50) % 25 === 0;
 }
 
 async function readReviewerStatus(config, round) {
@@ -379,7 +419,7 @@ async function handleApprovedImplementation(config, round, { runner, stderr, max
       return handleGateBApproved(config, round, { runner, stderr, maxRounds });
     }
     if (verifyStatus.status === "NEEDS_CHANGES") {
-      return handleRetryableNeedsChanges(config, round, verifyStatus, { maxRounds, stderr });
+      return handleRetryableNeedsChanges(config, round, verifyStatus, { maxRounds });
     }
     if (verifyStatus.status === "ERROR") {
       return 1;
@@ -403,12 +443,8 @@ async function handleGateBApproved(config, round, { runner, stderr, maxRounds })
   return runImplementationSignoff(config, { runner, round, stderr, maxRounds });
 }
 
-async function handleRetryableNeedsChanges(config, round, status, { maxRounds, stderr }) {
-  if (maxRounds <= 0) {
-    stderr.write("Implementation retry loops are not yet supported in node-cli first pass without review_max_rounds.\n");
-    return 2;
-  }
-  if (round >= maxRounds) {
+async function handleRetryableNeedsChanges(config, round, status, { maxRounds }) {
+  if (maxRounds > 0 && round >= maxRounds) {
     return handleMaxRounds(config, round, status);
   }
   await appendRoundProgress(config, round, `Retry: continuing to round ${round + 1}`);
@@ -444,23 +480,120 @@ async function runFreshContextReview(config, { runner, round, qualityEvidenceAva
   return status;
 }
 
+async function runImplementationQualityGates(config, round) {
+  const qualityOutcome = await runImplementationQualityChecks(config);
+  const browserOutcome = await runImplementationBrowserChecks(config);
+  const qualityEvidenceAvailable = Boolean(qualityOutcome || browserOutcome);
+  await persistImplementationQualityEvidence(config, { qualityOutcome, browserOutcome });
+
+  const blockedBrowserStatus = await handleImplementationBrowserFailures(config, { browserOutcome, round });
+  if (blockedBrowserStatus) {
+    return { kind: "continue", status: blockedBrowserStatus, qualityEvidenceAvailable };
+  }
+  if (await applyImplementationBrowserEvidenceGate(config, { browserOutcome, round })) {
+    return { kind: "exit", code: 1, qualityEvidenceAvailable };
+  }
+  return { kind: "continue", qualityEvidenceAvailable };
+}
+
 async function runImplementationQualityChecks(config) {
   if (!config.autoTest) {
-    await rm(safeStatePath(config, "quality_checks.md"), { force: true });
     return undefined;
   }
   const commands = await resolveRuntimeQualityCommands(config);
-  const outcome = await runCheckCommands(config, commands, {
+  return runCheckCommands(config, commands, {
     startLog: "Running quality checks",
     itemLog: "Quality check",
     header: "QUALITY CHECKS:",
   });
-  if (!outcome) {
+}
+
+async function runImplementationBrowserChecks(config) {
+  const commands = resolveRuntimeBrowserTestCommands(config);
+  return runCheckCommands(config, commands, {
+    startLog: "Running browser/E2E checks",
+    itemLog: "Browser/E2E check",
+    header: "BROWSER/E2E CHECKS:",
+  });
+}
+
+async function persistImplementationQualityEvidence(config, { qualityOutcome, browserOutcome }) {
+  const sections = [qualityOutcome, browserOutcome]
+    .filter(Boolean)
+    .map((outcome) => outcome.output.trim())
+    .filter(Boolean);
+  if (sections.length === 0) {
     await rm(safeStatePath(config, "quality_checks.md"), { force: true });
+    return;
+  }
+  await writeStateFile(config, "quality_checks.md", sections.join("\n\n"));
+}
+
+async function handleImplementationBrowserFailures(config, { browserOutcome, round }) {
+  if (!browserOutcome?.anyFailed) {
     return undefined;
   }
-  await writeStateFile(config, "quality_checks.md", outcome.output);
-  return outcome;
+  if (config.browserEvidencePolicy !== "block") {
+    await appendLog(config, `Browser/E2E checks failed before review; continuing because browser_evidence_policy=${config.browserEvidencePolicy}`);
+    await appendRoundProgress(config, round, `WARN - browser/E2E checks failed before review; continuing because browser_evidence_policy=${config.browserEvidencePolicy}`);
+    return undefined;
+  }
+
+  await appendLog(config, "Browser/E2E checks failed before review; returning to implementation");
+  await writeStateFile(config, "review.md", browserReviewBlockerMarkdown(browserOutcome));
+  const findings = browserReviewBlockerFindings(round);
+  await writeStateFile(config, "findings.json", `${JSON.stringify(findings, null, 2)}\n`);
+  const status = {
+    status: "NEEDS_CHANGES",
+    round,
+    reason: "Browser/E2E checks failed before implementation review",
+    failure_severity: "missing_feature",
+  };
+  await writeStatus({ ...status, workflow: "implement" }, config);
+  await appendRoundProgress(config, round, "NEEDS_CHANGES - browser/E2E checks failed before review");
+  return status;
+}
+
+async function applyImplementationBrowserEvidenceGate(config, { browserOutcome, round }) {
+  const assessment = await browserEvidenceGateAssessment(config, browserOutcome);
+  if (!assessment) {
+    return false;
+  }
+  const summary = browserEvidenceGateSummary(assessment);
+  await writeStateFile(config, BROWSER_EVIDENCE_GATE_FILENAME, browserEvidenceGateReport(config, assessment, "implementation review"));
+  if (config.browserEvidencePolicy === "warn") {
+    await appendLog(config, `Browser evidence gate warning before implementation review: ${summary}. See ${BROWSER_EVIDENCE_GATE_FILENAME}.`);
+    await appendRoundProgress(config, round, `WARN - browser evidence gate: ${summary}.`);
+    return false;
+  }
+
+  const reason = `browser evidence gate paused before implementation review: ${summary}. See ${BROWSER_EVIDENCE_GATE_FILENAME}.`;
+  await appendLog(config, `Paused: ${reason}`);
+  await writeStatus({
+    status: "AWAITING_INPUT",
+    round,
+    reason,
+    failure_severity: "missing_feature",
+    workflow: "implement",
+  }, config);
+  await appendRoundProgress(config, round, `AWAITING_INPUT - browser evidence gate: ${summary}`);
+  return true;
+}
+
+function browserReviewBlockerMarkdown(outcome) {
+  return `# Review Blocked By Browser/E2E Checks\n\nBrowser/E2E checks failed before implementation review. The reviewer cannot approve until these failures are fixed or the configured command is corrected.\n\n\`\`\`text\n${outcome.output.trim()}\n\`\`\``;
+}
+
+function browserReviewBlockerFindings(round) {
+  return {
+    round,
+    findings: [{
+      id: "BROWSER-E2E-001",
+      severity: "HIGH",
+      summary: "Browser/E2E checks failed before implementation review",
+      file_refs: ["quality_checks.md:1"],
+    }],
+  };
 }
 
 async function runGateBVerification(config, { runner, round }) {
@@ -571,7 +704,7 @@ async function runGateCBounce(config, { runner, round, stderr, maxRounds, disput
     return 0;
   }
   if (status.status === "NEEDS_CHANGES") {
-    return handleRetryableNeedsChanges(config, round, status, { maxRounds, stderr });
+    return handleRetryableNeedsChanges(config, round, status, { maxRounds });
   }
   if (status.status === "ERROR") {
     return 1;

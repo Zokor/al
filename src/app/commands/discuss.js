@@ -4,12 +4,15 @@ import { createInterface } from "node:readline/promises";
 import { runAgentInvocation } from "../../agent/runtime.js";
 import { resolveAgentForAction } from "../../agent/resolution.js";
 import { loadConfig } from "../../config/index.js";
+import { DiscoveryPhase, runDiscoveryPrepass, shouldRunDiscoveryPrepass } from "../discoveryPrepass.js";
+import { appendPromptOverlay } from "../promptOverlays.js";
 import { appendEvent } from "../../state/events.js";
 import { appendStateFile, readStateFile, safeStatePath } from "../../state/files.js";
 import { initializeWorkflowState, resetStateDir } from "../../state/initialization.js";
 import { preferencesPath } from "../../state/paths.js";
 import { writeStatus } from "../../state/status.js";
 import { assertNoActiveWaveLock } from "../../state/waveLock.js";
+import { writePipelineResumeState } from "../../workflow/pipelineResumeState.js";
 import { requireResumeWorkflow } from "./phases.js";
 
 const DISCUSS_CHALLENGER_APPROVED_SENTINEL = "DISCUSS_CHALLENGER_APPROVED";
@@ -22,11 +25,6 @@ const KIND_LABELS = Object.freeze({
 
 export async function runDiscuss(cli, context) {
   const config = await loadConfig(context.cwd, cli, context);
-  if (cli.commandArgs.discover) {
-    context.stderr.write("Unsupported in node-cli first pass: discuss --discover\n");
-    context.stderr.write("See node-cli/docs/unsupported.md for supported first-pass behavior.\n");
-    return 2;
-  }
 
   if (cli.commandArgs.resume) {
     await requireResumeWorkflow(config, "discuss");
@@ -37,6 +35,20 @@ export async function runDiscuss(cli, context) {
     await resetStateDir(config);
     await appendEvent(config, { type: "command_started", data: { command: "discuss" } });
     await initializeWorkflowState(config, { task, workflow: "discuss" });
+    if (cli.commandArgs.pipelineResumeStateArgs) {
+      await writePipelineResumeState(config, cli.commandArgs.pipelineResumeStateArgs);
+    }
+    if (await shouldRunDiscoveryPrepass(config, {
+      explicit: Boolean(cli.commandArgs.discover),
+      phase: DiscoveryPhase.Discuss,
+    })) {
+      const discoveryComplete = await runDiscoveryPrepass(config, {
+        runner: context.agentRunner,
+      });
+      if (!discoveryComplete) {
+        return 1;
+      }
+    }
   }
 
   const success = await discussLoop(config, {
@@ -570,18 +582,21 @@ function appendCaveats(content, caveats) {
 
 async function discussInitialPrompt(config) {
   const paths = phasePaths(config);
-  return `Read the task from ${paths.taskMd}.\n\nYou are facilitating a requirements discussion. Your goal is to identify 3-7 gray areas, ambiguities, or important design decisions that should be clarified before planning begins.\n\nAsk ONE question at a time. Be specific and provide context for why the question matters. After the user answers, ask the next question or, if all key decisions have been made, write the agreed decisions to ${paths.preferencesMd} as a markdown list of locked decisions.${await discoveryReferenceSection(config)}\n\nStart by asking your first question now.`;
+  const prompt = `Read the task from ${paths.taskMd}.\n\nYou are facilitating a requirements discussion. Your goal is to identify 3-7 gray areas, ambiguities, or important design decisions that should be clarified before planning begins.\n\nAsk ONE question at a time. Be specific and provide context for why the question matters. After the user answers, ask the next question or, if all key decisions have been made, write the agreed decisions to ${paths.preferencesMd} as a markdown list of locked decisions.${await discoveryReferenceSection(config)}\n\nStart by asking your first question now.`;
+  return appendPromptOverlay(prompt, config, "discuss");
 }
 
 async function discussFollowupPrompt(config, userAnswer) {
   const paths = phasePaths(config);
   const history = (await readStateFile(config, "discuss-progress.md")) || "(no prior history)";
-  return `Discussion history so far:\n${history}\n\nThe user's latest answer: ${userAnswer}\n\n${await discoveryReferenceSection(config)}\n\nBased on this answer, either:\n1. Ask your next question (if there are remaining gray areas), or\n2. If all key decisions have been made, write the agreed decisions to ${paths.preferencesMd} as a markdown list of locked decisions and say "All decisions captured."\n\nRemember: ask only ONE question at a time.`;
+  const prompt = `Discussion history so far:\n${history}\n\nThe user's latest answer: ${userAnswer}\n\n${await discoveryReferenceSection(config)}\n\nBased on this answer, either:\n1. Ask your next question (if there are remaining gray areas), or\n2. If all key decisions have been made, write the agreed decisions to ${paths.preferencesMd} as a markdown list of locked decisions and say "All decisions captured."\n\nRemember: ask only ONE question at a time.`;
+  return appendPromptOverlay(prompt, config, "discuss");
 }
 
 async function discussChallengerPrompt(config, actorLabel) {
   const paths = phasePaths(config);
-  return `Read the task from ${paths.taskMd}.\nRead the current draft decisions from ${paths.preferencesMd}.\nRead the full discussion history from ${paths.discussProgressMd}.\n\nYou are the ${actorLabel} challenger in a multi-agent requirements discussion. ${paths.discussProgressMd} is the source of truth for the raw exchange history; ${paths.preferencesMd} is only the current draft summary. Do NOT edit repository files and do NOT rewrite ${paths.preferencesMd} yourself.${await discoveryReferenceSection(config)}\n\nDecide whether the current draft is complete from your perspective.\n\nYou must do exactly one of these two things:\n1. If you approve the current draft, reply with this exact phrase and nothing else: ${DISCUSS_CHALLENGER_APPROVED_SENTINEL}\n2. Otherwise, ask exactly one direct user-facing follow-up question.\n\nDo not ask multiple questions. Do not provide commentary before or after the question.`;
+  const prompt = `Read the task from ${paths.taskMd}.\nRead the current draft decisions from ${paths.preferencesMd}.\nRead the full discussion history from ${paths.discussProgressMd}.\n\nYou are the ${actorLabel} challenger in a multi-agent requirements discussion. ${paths.discussProgressMd} is the source of truth for the raw exchange history; ${paths.preferencesMd} is only the current draft summary. Do NOT edit repository files and do NOT rewrite ${paths.preferencesMd} yourself.${await discoveryReferenceSection(config)}\n\nDecide whether the current draft is complete from your perspective.\n\nYou must do exactly one of these two things:\n1. If you approve the current draft, reply with this exact phrase and nothing else: ${DISCUSS_CHALLENGER_APPROVED_SENTINEL}\n2. Otherwise, ask exactly one direct user-facing follow-up question.\n\nDo not ask multiple questions. Do not provide commentary before or after the question.`;
+  return appendPromptOverlay(prompt, config, "discuss");
 }
 
 async function discussFinalizePrompt(config, caveats) {
@@ -589,7 +604,8 @@ async function discussFinalizePrompt(config, caveats) {
   const caveatsSection = caveats.length
     ? `\n\nUnresolved caveats that must be reflected in the final draft:\n${caveats.map((item) => `- ${item}`).join("\n")}\nInclude an explicit \`## Caveats\` section in ${paths.preferencesMd} covering these gaps.`
     : "";
-  return `Read the task from ${paths.taskMd}.\nRead the current draft from ${paths.preferencesMd}.\nRead the full discussion history from ${paths.discussProgressMd}.${await discoveryReferenceSection(config)}${caveatsSection}\n\nRewrite ${paths.preferencesMd} from scratch so it reflects the full discussion, including every resolved answer from the transcript.\nThe final file should be a concise markdown summary of locked decisions.\nIf there are unresolved gaps or validation questions, include a \`## Caveats\` section with bullet points.\nDo not ask another question. Your job is to finalize the decision summary now.`;
+  const prompt = `Read the task from ${paths.taskMd}.\nRead the current draft from ${paths.preferencesMd}.\nRead the full discussion history from ${paths.discussProgressMd}.${await discoveryReferenceSection(config)}${caveatsSection}\n\nRewrite ${paths.preferencesMd} from scratch so it reflects the full discussion, including every resolved answer from the transcript.\nThe final file should be a concise markdown summary of locked decisions.\nIf there are unresolved gaps or validation questions, include a \`## Caveats\` section with bullet points.\nDo not ask another question. Your job is to finalize the decision summary now.`;
+  return appendPromptOverlay(prompt, config, "discuss");
 }
 
 async function discoveryReferenceSection(config) {

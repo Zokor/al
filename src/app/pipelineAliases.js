@@ -1,6 +1,6 @@
 export const PIPELINE_ALIAS_DEFINITIONS = Object.freeze({
   "plan-tasks-implement-verify": { phases: "plan,tasks,implement,verify", taskStyle: "option", implementFlags: true },
-  "plan-implement-verify": { phases: "plan,implement,verify", taskStyle: "option", implementFlags: true },
+  "plan-implement-verify": { phases: "plan,implement,verify", taskStyle: "option", allowPositionalTask: true, implementFlags: true },
   "tasks-implement-verify": { phases: "tasks,implement,verify", taskStyle: "option", implementFlags: true },
   "discuss-plan-tasks-implement": { phases: "discuss,plan,tasks,implement", taskStyle: "option", implementFlags: true },
   "discuss-plan-implement": { phases: "discuss,plan,implement", taskStyle: "option", implementFlags: true },
@@ -33,3 +33,16 @@ export const PIPELINE_ALIAS_DEFINITIONS = Object.freeze({
 });
 
 export const PIPELINE_ALIAS_COMMANDS = new Set(Object.keys(PIPELINE_ALIAS_DEFINITIONS));
+
+export const IMPLEMENTATION_WORKFLOW_DEFINITIONS = Object.freeze({
+  "plan-tasks-implement": { phases: "plan,tasks,implement", taskStyle: "positional", implementFlags: true },
+  "plan-implement": { phases: "plan,implement", taskStyle: "positional", implementFlags: true },
+  "tasks-implement": { phases: "tasks,implement", taskStyle: "none", implementFlags: true },
+});
+
+export const IMPLEMENTATION_WORKFLOW_COMMANDS = new Set(Object.keys(IMPLEMENTATION_WORKFLOW_DEFINITIONS));
+
+export function pipelineAliasDeprecationNote(phases) {
+  const alias = phases.replaceAll(",", "-");
+  return `note: '${alias}' is a legacy alias; the canonical form is 'agent-loop pipeline --phases ${phases}'`;
+}

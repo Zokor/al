@@ -4,42 +4,25 @@ import { createInterface } from "node:readline";
 import { runAgentInvocation } from "../../agent/runtime.js";
 import { runCheckCommands } from "../checkCommands.js";
 import { canonicalGoalLintShouldBlock, formatCanonicalGoalList, loadOrRefreshAcceptanceGoals, normalizeGoalAlias } from "../acceptanceGoals.js";
+import { BROWSER_EVIDENCE_GATE_FILENAME, browserEvidenceGateAssessment, browserEvidenceGateReport, browserEvidenceGateSummary } from "../browserEvidence.js";
 import { loadConfig } from "../../config/index.js";
 import { resolveRuntimeBrowserTestCommands, resolveRuntimeQualityCommands } from "../../config/qualityCommands.js";
 import { appendEvent } from "../../state/events.js";
 import { appendStateFile, readJsonStateFile, readStateFile, removeStateFile, safeStatePath, writeStateFile } from "../../state/files.js";
+import { initializeWorkflowState, resetStateDir } from "../../state/initialization.js";
 import { writeStatus } from "../../state/status.js";
+import { writePipelineResumeState } from "../../workflow/pipelineResumeState.js";
+import { readTaskInput } from "../../workflow/plan.js";
 import { requireResumeWorkflow } from "./phases.js";
 
 const PASSING_VERIFICATION_STATUSES = new Set(["passed"]);
 const FAILING_VERIFICATION_STATUSES = new Set(["failed", "blocked", "skipped", "pending"]);
-const BROWSER_EVIDENCE_GATE_FILENAME = "browser-evidence-gate.md";
-const BROWSER_EVIDENCE_EXEMPT_FILENAME = "browser-evidence-exempt.flag";
-const BROWSER_GOAL_KEYWORDS = [
-  "browser",
-  "e2e",
-  "end-to-end",
-  "playwright",
-  "cypress",
-  "puppeteer",
-  "selenium",
-  "frontend",
-  "page",
-  "route",
-  "modal",
-  "form",
-  "button",
-  "click",
-  "viewport",
-  "responsive",
-  "accessibility",
-];
 
 export async function runVerify(cli, context) {
   const config = await loadConfig(context.cwd, cli, context);
-  await appendEvent(config, { type: "command_started", data: { command: "verify" } });
 
   if (cli.commandArgs.resume) {
+    await appendEvent(config, { type: "command_started", data: { command: "verify" } });
     await requireResumeWorkflow(config, "verify");
     if (cli.commandArgs.manual) {
       const success = await runManualVerify(config, { context, resume: true });
@@ -49,6 +32,14 @@ export async function runVerify(cli, context) {
     return finishVerifyCommand(config, success);
   }
 
+  if (cli.commandArgs.pipelineStart) {
+    return runPipelineVerifyStart(cli, context, config);
+  }
+  if (cli.commandArgs.pipelineContinue) {
+    return runPipelineVerifyContinue(context, config);
+  }
+
+  await appendEvent(config, { type: "command_started", data: { command: "verify" } });
   const entryError = await verifyEntryError(config);
   if (entryError) {
     context.stderr.write(`${entryError}\n`);
@@ -61,6 +52,32 @@ export async function runVerify(cli, context) {
     return success ? 0 : 1;
   }
 
+  await prepareFreshVerification(config);
+  const success = await runAutomatedVerifyRound(config, { runner: context.agentRunner, resume: false });
+  return finishVerifyCommand(config, success);
+}
+
+async function runPipelineVerifyStart(cli, context, config) {
+  const task = await readTaskInput(context.cwd, cli.commandArgs);
+  await resetStateDir(config);
+  await appendEvent(config, { type: "command_started", data: { command: "verify" } });
+  await initializeWorkflowState(config, { task, workflow: "verify" });
+  if (cli.commandArgs.pipelineResumeStateArgs) {
+    await writePipelineResumeState(config, cli.commandArgs.pipelineResumeStateArgs);
+  }
+
+  if (cli.commandArgs.manual) {
+    const success = await runManualVerify(config, { context, resume: false });
+    return success ? 0 : 1;
+  }
+
+  await prepareFreshVerification(config);
+  const success = await runAutomatedVerifyRound(config, { runner: context.agentRunner, resume: false });
+  return finishVerifyCommand(config, success);
+}
+
+async function runPipelineVerifyContinue(context, config) {
+  await appendEvent(config, { type: "command_started", data: { command: "verify" } });
   await prepareFreshVerification(config);
   const success = await runAutomatedVerifyRound(config, { runner: context.agentRunner, resume: false });
   return finishVerifyCommand(config, success);
@@ -984,20 +1001,12 @@ function titleCaseStatus(status) {
 }
 
 async function applyBrowserEvidenceGate(config, browserOutcome, round) {
-  if (browserOutcome || config.browserEvidencePolicy === "off" || await stateFileExists(config, BROWSER_EVIDENCE_EXEMPT_FILENAME)) {
+  const assessment = await browserEvidenceGateAssessment(config, browserOutcome);
+  if (!assessment) {
     return false;
   }
-  const keywordHits = await browserGoalKeywordHits(config);
-  if (keywordHits.length === 0) {
-    return false;
-  }
-  const assessment = {
-    keywordHits,
-    commandsConfigured: config.browserTestCommands.length > 0,
-    checksEnabled: config.verifyBrowserTest,
-  };
   const summary = browserEvidenceGateSummary(assessment);
-  await writeStateFile(config, BROWSER_EVIDENCE_GATE_FILENAME, browserEvidenceGateReport(config, assessment));
+  await writeStateFile(config, BROWSER_EVIDENCE_GATE_FILENAME, browserEvidenceGateReport(config, assessment, "verification"));
   if (config.browserEvidencePolicy === "warn") {
     await appendLog(config, `Browser evidence gate warning before verification: ${summary}. See ${BROWSER_EVIDENCE_GATE_FILENAME}.`);
     await appendVerificationProgress(config, round, `WARN - browser evidence gate: ${summary}.`);
@@ -1015,51 +1024,6 @@ async function applyBrowserEvidenceGate(config, browserOutcome, round) {
   }, config);
   await appendVerificationProgress(config, round, `AWAITING_INPUT - browser evidence gate: ${summary}`);
   return true;
-}
-
-async function browserGoalKeywordHits(config) {
-  const plan = await readStateFile(config, "plan.md");
-  const task = await readStateFile(config, "task.md");
-  const combined = `${plan}\n${task}`.toLowerCase();
-  return BROWSER_GOAL_KEYWORDS.filter((keyword) => combined.includes(keyword));
-}
-
-function browserEvidenceGateSummary(assessment) {
-  if (assessment.commandsConfigured && !assessment.checksEnabled) {
-    return "browser-facing goals detected but browser/E2E checks are disabled";
-  }
-  if (assessment.commandsConfigured) {
-    return "browser-facing goals detected but no browser/E2E result was captured";
-  }
-  return "browser-facing goals detected but no browser/E2E command is configured";
-}
-
-function browserEvidenceGateReport(config, assessment) {
-  const keywords = assessment.keywordHits.map((keyword) => `- \`${keyword}\``).join("\n");
-  const commandState = browserEvidenceCommandState(assessment);
-  return `# Browser Evidence Gate\n\nAgent Loop paused before verification because the active plan/task looks browser-facing, but no deterministic browser/E2E evidence ran.\n\n## Detected Signals\n\n${keywords}\n\n## Current Configuration\n\n- \`browser_evidence_policy\`: \`${config.browserEvidencePolicy}\`\n- \`verify_browser_test\`: \`${config.verifyBrowserTest}\`\n- \`browser_test_commands\`: ${commandState}\n- State exemption: \`false\`\n\n## Required Action\n\nConfigure \`browser_test_commands\` with a deterministic browser/E2E command and keep \`verify_browser_test = true\`, then resume. If this work intentionally has no browser surface, set \`browser_evidence_policy\` to \`off\` or write an exemption reason to \`${safeStatePath(config, BROWSER_EVIDENCE_EXEMPT_FILENAME)}\`.\n`;
-}
-
-function browserEvidenceCommandState(assessment) {
-  if (assessment.commandsConfigured && assessment.checksEnabled) {
-    return "configured and enabled, but no result was captured";
-  }
-  if (assessment.commandsConfigured) {
-    return "configured but disabled (`verify_browser_test = false`)";
-  }
-  return "not configured";
-}
-
-async function stateFileExists(config, fileName) {
-  try {
-    await stat(safeStatePath(config, fileName));
-    return true;
-  } catch (error) {
-    if (error.code === "ENOENT") {
-      return false;
-    }
-    throw error;
-  }
 }
 
 function verificationPrompt(config, { mode, resume, qualityOutcome, browserOutcome, canonicalGoalList }) {
@@ -1100,6 +1064,18 @@ function verificationCheckPromptSection(config, { qualityOutcome, browserOutcome
     sections.push(`Browser/E2E check results (${label}):\n${browserOutcome.output}`);
   }
   return sections.length > 0 ? `\n\n${sections.join("\n\n")}` : "";
+}
+
+async function stateFileExists(config, fileName) {
+  try {
+    await stat(safeStatePath(config, fileName));
+    return true;
+  } catch (error) {
+    if (error.code === "ENOENT") {
+      return false;
+    }
+    throw error;
+  }
 }
 
 function phasePaths(config) {

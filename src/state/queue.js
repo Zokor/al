@@ -20,6 +20,7 @@ const QUEUE_FILENAME = "goal-queue.json";
 const QUEUE_LOCK_FILENAME = "goal-queue.lock";
 const TERMINAL_STATUSES = new Set([QueueStatus.Done, QueueStatus.Cancelled]);
 const CLEAR_ACTIVE_SLICE_STATUSES = new Set([QueueStatus.Queued, QueueStatus.Deferred, QueueStatus.Cancelled]);
+const ACTIVE_RUN_STATUSES = new Set([QueueStatus.Active, QueueStatus.Split, QueueStatus.Implementing, QueueStatus.Verifying]);
 
 export async function readQueue(config) {
   const text = await readStateFile(config, QUEUE_FILENAME);
@@ -94,6 +95,77 @@ export async function setQueueItemStatus(config, queueId, status, reason) {
   queue.items[index] = normalizeQueueItem(updated);
   await writeQueue(config, queue);
   return queue.items[index];
+}
+
+export async function activateQueueItem(config, queueId) {
+  await touchQueueLock(config);
+  const queue = await readQueue(config);
+  const targetIndex = queue.items.findIndex((item) => item.queue_id === queueId);
+  if (targetIndex === -1) {
+    throw new Error(`State error: Queue item not found: ${queueId}`);
+  }
+
+  return activateQueueItemAtIndex(config, queue, targetIndex);
+}
+
+export async function activateNextQueueItem(config) {
+  await touchQueueLock(config);
+  const queue = await readQueue(config);
+  const activeIndex = queue.items.findIndex((item) => ACTIVE_RUN_STATUSES.has(item.status));
+  const targetIndex = activeIndex === -1 ? nextEligibleIndex(queue) : activeIndex;
+  if (targetIndex === -1) {
+    return null;
+  }
+  return activateQueueItemAtIndex(config, queue, targetIndex);
+}
+
+async function activateQueueItemAtIndex(config, queue, targetIndex) {
+  const target = queue.items[targetIndex];
+  if (TERMINAL_STATUSES.has(target.status)) {
+    throw new Error(`State error: Queue item ${target.queue_id} is ${target.status}; terminal items cannot be activated.`);
+  }
+  const now = timestamp(config);
+  queue.items = queue.items.map((item, index) => {
+    if (index === targetIndex) {
+      const activated = {
+        ...item,
+        status: QueueStatus.Active,
+        updated_at: now,
+      };
+      delete activated.reason;
+      return normalizeQueueItem(activated);
+    }
+    if (ACTIVE_RUN_STATUSES.has(item.status)) {
+      return normalizeQueueItem({
+        ...item,
+        status: QueueStatus.Deferred,
+        reason: "Deferred because another queue item was activated.",
+        updated_at: now,
+      });
+    }
+    return normalizeQueueItem(item);
+  });
+  await writeQueue(config, queue);
+  return queue.items[targetIndex];
+}
+
+function nextEligibleIndex(queue) {
+  const doneIds = new Set(queue.items.filter((item) => item.status === QueueStatus.Done).map((item) => item.queue_id));
+  let bestIndex = -1;
+  let bestPriority = Number.NEGATIVE_INFINITY;
+  for (const [index, item] of queue.items.entries()) {
+    if (item.status !== QueueStatus.Queued) {
+      continue;
+    }
+    if ((item.depends_on ?? []).some((dependency) => !doneIds.has(dependency))) {
+      continue;
+    }
+    if (item.priority > bestPriority) {
+      bestPriority = item.priority;
+      bestIndex = index;
+    }
+  }
+  return bestIndex;
 }
 
 export async function writeQueue(config, queue) {

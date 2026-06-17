@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { access, mkdir, open } from "node:fs/promises";
 import { dirname } from "node:path";
 import { readStateFile, removeStateFile, safeStatePath, writeStateFile } from "./files.js";
@@ -28,6 +29,33 @@ export async function readGoal(config) {
     throw new Error(`Unsupported goal.json schema_version ${schemaVersion}; expected ${GOAL_SCHEMA_VERSION}`);
   }
   return value;
+}
+
+export async function createGoal(config, objective, sourceFile, replace = false) {
+  const normalizedObjective = objective.trim();
+  if (!normalizedObjective) {
+    throw new Error("Goal objective cannot be empty.");
+  }
+
+  await touchGoalLock(config);
+  const existing = await readGoal(config);
+  if (!replace && existing) {
+    throw new Error(`Goal already exists (${existing.status}): "${existing.objective}". Use --replace to replace it.`);
+  }
+
+  const now = timestamp(config);
+  const goal = {
+    schema_version: GOAL_SCHEMA_VERSION,
+    goal_id: randomUUID(),
+    objective: normalizedObjective,
+    status: GoalStatus.Active,
+    source_file: sourceFile,
+    phases: [...DEFAULT_GOAL_PHASES],
+    created_at: now,
+    updated_at: now,
+  };
+  await writeGoal(config, goal);
+  return normalizeGoal(goal);
 }
 
 export async function setGoalStatus(config, status, reason) {

@@ -1,11 +1,16 @@
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import test from "node:test";
+import { promisify } from "node:util";
 import { validateCompletionInvariants } from "../src/app/commands/verify.js";
+import { DiscoveryPhase, shouldRunDiscoveryPrepass } from "../src/app/discoveryPrepass.js";
 import { runMain } from "../src/main.js";
 import { captureStream } from "./helpers.js";
+
+const execFileAsync = promisify(execFile);
 
 async function run(argv, cwd, env = {}, overrides = {}) {
   const stdout = captureStream();
@@ -21,6 +26,11 @@ async function run(argv, cwd, env = {}, overrides = {}) {
     ...overrides,
   });
   return { code, stdout: stdout.text(), stderr: stderr.text() };
+}
+
+async function git(cwd, args) {
+  const result = await execFileAsync("git", args, { cwd, encoding: "utf8" });
+  return result.stdout.trim();
 }
 
 test("status reports uninitialized without status.json", async () => {
@@ -217,6 +227,9 @@ test("tasks fails without a plan and initializes decompose when plan exists", as
   const missing = await run(["tasks"], project);
   assert.equal(missing.code, 1);
   assert.match(missing.stderr, /No plan found/);
+  const missingFile = await run(["tasks", "--file", "missing-plan.md"], project);
+  assert.equal(missingFile.code, 1);
+  assert.match(missingFile.stderr, /Config error: Failed to read plan file 'missing-plan\.md'/);
   await writeFile(resolve(project, ".agent-loop.json"), JSON.stringify({ implementer: "codex", reviewer: "codex" }));
   await run(["plan", "Build"], project);
   await writeFile(resolve(project, ".agent-loop/state/plan.md"), "Plan body");
@@ -378,6 +391,57 @@ test("goal lifecycle commands mutate Rust-compatible goal state", async () => {
   assert.match(missingResume.stdout, /^No goal to resume\.\n/);
 });
 
+test("goal creation writes Rust-compatible state before unsupported supervisor run", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+
+  const create = await run(["goal", "Ship", "reporting"], project);
+
+  assert.equal(create.code, 2);
+  assert.match(create.stdout, /^Goal active: "Ship reporting"\n/);
+  assert.match(create.stderr, /Unsupported in node-cli first pass: goal/);
+  const goal = JSON.parse(await readFile(resolve(stateDir, "goal.json"), "utf8"));
+  assert.equal(goal.schema_version, 1);
+  assert.match(goal.goal_id, /^[0-9a-f-]{8}-[0-9a-f-]{4}-[0-9a-f-]{4}-[0-9a-f-]{4}-[0-9a-f-]{12}$/);
+  assert.equal(goal.objective, "Ship reporting");
+  assert.equal(goal.status, "active");
+  assert.deepEqual(goal.phases, ["spec", "plan", "tasks", "implement", "verify"]);
+  assert.equal(goal.created_at, "2026-01-02T03:04:05.006Z");
+  assert.equal(goal.updated_at, "2026-01-02T03:04:05.006Z");
+  assert.equal(Object.hasOwn(goal, "source_file"), false);
+  assert.equal(Object.hasOwn(goal, "reason"), false);
+  assert.equal(await readFile(resolve(stateDir, "goal.lock"), "utf8"), "");
+
+  const conflict = await run(["goal", "--objective", "Replace reporting"], project);
+  assert.equal(conflict.code, 1);
+  assert.match(conflict.stderr, /Goal already exists \(active\): "Ship reporting"\. Use --replace to replace it\./);
+
+  await writeFile(resolve(project, "goal.md"), "File objective\n");
+  const replace = await run(["goal", "--file", "goal.md", "--replace"], project);
+  assert.equal(replace.code, 2);
+  assert.match(replace.stdout, /^Goal active: "File objective"\n/);
+  const replacedGoal = JSON.parse(await readFile(resolve(stateDir, "goal.json"), "utf8"));
+  assert.equal(replacedGoal.objective, "File objective");
+  assert.equal(replacedGoal.source_file, "goal.md");
+  assert.notEqual(replacedGoal.goal_id, goal.goal_id);
+});
+
+test("goal creation validates objective sources", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+
+  const missing = await run(["goal"], project);
+  assert.equal(missing.code, 1);
+  assert.match(missing.stderr, /Provide exactly one goal objective via text, --objective, or --file\./);
+
+  const duplicate = await run(["goal", "Ship", "--objective", "Other"], project);
+  assert.equal(duplicate.code, 1);
+  assert.match(duplicate.stderr, /Provide exactly one goal objective via text, --objective, or --file\./);
+
+  const empty = await run(["goal", "--objective", "   "], project);
+  assert.equal(empty.code, 1);
+  assert.match(empty.stderr, /Provide exactly one goal objective via text, --objective, or --file\./);
+});
+
 test("goal lifecycle validates Rust lifecycle-only flags and keeps runtime gaps explicit", async () => {
   const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
   const invalid = await run(["goal", "--file", "goal.md", "status"], project);
@@ -385,12 +449,35 @@ test("goal lifecycle validates Rust lifecycle-only flags and keeps runtime gaps 
   assert.match(invalid.stderr, /`agent-loop goal status` does not accept objective, file, replace, discovery, or implementation flags/);
 
   const resumeRun = await run(["goal", "resume", "--run"], project);
-  assert.equal(resumeRun.code, 2);
-  assert.match(resumeRun.stderr, /Unsupported in node-cli first pass: goal resume --run/);
+  assert.equal(resumeRun.code, 1);
+  assert.match(resumeRun.stdout, /^No goal to resume\.\n/);
+});
 
-  const create = await run(["goal", "Ship reporting"], project);
-  assert.equal(create.code, 2);
-  assert.match(create.stderr, /Unsupported in node-cli first pass: goal/);
+test("goal resume run marks active before unsupported resume orchestration", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(resolve(stateDir, "goal.json"), `${JSON.stringify({
+    schema_version: 1,
+    goal_id: "goal-1",
+    objective: "Ship reporting",
+    status: "paused",
+    phases: ["spec", "plan", "tasks", "implement", "verify"],
+    created_at: "2026-01-01T00:00:00.000Z",
+    updated_at: "2026-01-01T00:00:00.000Z",
+    reason: "Paused by user.",
+  })}\n`);
+
+  const result = await run(["goal", "resume", "--run"], project);
+
+  assert.equal(result.code, 2);
+  assert.match(result.stdout, /^Goal active: "Ship reporting"\n/);
+  assert.match(result.stderr, /Unsupported in node-cli first pass: goal resume --run/);
+  const goal = JSON.parse(await readFile(resolve(stateDir, "goal.json"), "utf8"));
+  assert.equal(goal.status, "active");
+  assert.equal(goal.updated_at, "2026-01-02T03:04:05.006Z");
+  assert.equal(Object.hasOwn(goal, "reason"), false);
+  assert.equal(await readFile(resolve(stateDir, "goal.lock"), "utf8"), "");
 });
 
 test("queue lifecycle commands mutate Rust-compatible queue state", async () => {
@@ -514,6 +601,248 @@ test("queue JSON output and unsupported run boundary match the state-only scope"
   const runBoundary = await run(["queue", "resume", "next-queue-item", "--run"], project);
   assert.equal(runBoundary.code, 2);
   assert.match(runBoundary.stderr, /Unsupported in node-cli first pass: queue resume --run/);
+});
+
+test("queue resume run prepares active queue item and goal before unsupported supervisor run", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(resolve(stateDir, "goal-queue.json"), JSON.stringify({
+    schema_version: 1,
+    items: [
+      {
+        queue_id: "active-queue-item",
+        title: "Active item",
+        objective: "Active item",
+        status: "active",
+        priority: 0,
+        created_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        queue_id: "target-queue-item",
+        title: "Target item",
+        objective: "Target item objective",
+        source_file: "target.md",
+        status: "deferred",
+        priority: 2,
+        created_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:00.000Z",
+        reason: "Deferred by user.",
+      },
+    ],
+  }));
+
+  const result = await run(["queue", "resume", "target-queue-item", "--run"], project);
+
+  assert.equal(result.code, 2);
+  assert.match(result.stdout, /^Queue item runnable: target-q Target item\nResuming queue item target-q: Target item\n/);
+  assert.match(result.stderr, /Unsupported in node-cli first pass: queue resume --run/);
+  const queue = JSON.parse(await readFile(resolve(stateDir, "goal-queue.json"), "utf8"));
+  assert.equal(queue.items[0].status, "deferred");
+  assert.equal(queue.items[0].reason, "Deferred because another queue item was activated.");
+  assert.equal(queue.items[0].updated_at, "2026-01-02T03:04:05.006Z");
+  assert.equal(queue.items[1].status, "active");
+  assert.equal(Object.hasOwn(queue.items[1], "reason"), false);
+  assert.equal(queue.items[1].updated_at, "2026-01-02T03:04:05.006Z");
+  const goal = JSON.parse(await readFile(resolve(stateDir, "goal.json"), "utf8"));
+  assert.equal(goal.objective, "Target item objective");
+  assert.equal(goal.source_file, "target.md");
+  assert.equal(goal.status, "active");
+  assert.deepEqual(goal.phases, ["spec", "plan", "tasks", "implement", "verify"]);
+  assert.equal(await readFile(resolve(stateDir, "goal.lock"), "utf8"), "");
+  assert.equal(await readFile(resolve(stateDir, "goal-queue.lock"), "utf8"), "");
+});
+
+test("queue resume run preserves active goal conflict after activation", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(resolve(stateDir, "goal.json"), JSON.stringify({
+    schema_version: 1,
+    goal_id: "goal-1",
+    objective: "Existing active goal",
+    status: "active",
+    phases: ["spec", "plan", "tasks", "implement", "verify"],
+    created_at: "2026-01-01T00:00:00.000Z",
+    updated_at: "2026-01-01T00:00:00.000Z",
+  }));
+  await writeFile(resolve(stateDir, "goal-queue.json"), JSON.stringify({
+    schema_version: 1,
+    items: [{
+      queue_id: "target-queue-item",
+      title: "Target item",
+      objective: "Target item objective",
+      status: "deferred",
+      priority: 2,
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:00:00.000Z",
+      reason: "Deferred by user.",
+    }],
+  }));
+
+  const result = await run(["queue", "resume", "target-queue-item", "--run"], project);
+
+  assert.equal(result.code, 1);
+  assert.match(result.stdout, /^Queue item runnable: target-q Target item\n/);
+  assert.doesNotMatch(result.stdout, /Resuming queue item/);
+  assert.match(result.stderr, /State error: Active goal already exists: "Existing active goal"\. Pause, clear, or complete it before running queue item target-q\./);
+  const queue = JSON.parse(await readFile(resolve(stateDir, "goal-queue.json"), "utf8"));
+  assert.equal(queue.items[0].status, "active");
+  assert.equal(Object.hasOwn(queue.items[0], "reason"), false);
+  const goal = JSON.parse(await readFile(resolve(stateDir, "goal.json"), "utf8"));
+  assert.equal(goal.objective, "Existing active goal");
+  assert.equal(goal.goal_id, "goal-1");
+});
+
+test("supervise queue rejects task, file, and resume combinations", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+
+  const withResume = await run(["supervise", "--queue", "--resume"], project);
+  assert.equal(withResume.code, 1);
+  assert.match(withResume.stderr, /`agent-loop supervise --queue` cannot be combined with task text, --file, or --resume\./);
+
+  const withTask = await run(["supervise", "--queue", "Ship task"], project);
+  assert.equal(withTask.code, 1);
+  assert.match(withTask.stderr, /`agent-loop supervise --queue` cannot be combined with task text, --file, or --resume\./);
+
+  const withFile = await run(["supervise", "--queue", "--file", "task.md"], project);
+  assert.equal(withFile.code, 1);
+  assert.match(withFile.stderr, /`agent-loop supervise --queue` cannot be combined with task text, --file, or --resume\./);
+});
+
+test("supervise queue reports empty queue without creating goal state", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const result = await run(["supervise", "--queue"], project);
+
+  assert.equal(result.code, 1);
+  assert.match(result.stdout, /^Queue is empty; add work with `agent-loop queue add <objective>`\.\n/);
+  await assert.rejects(() => readFile(resolve(project, ".agent-loop/state/goal.json"), "utf8"), /ENOENT/);
+});
+
+test("supervise queue activates next eligible item and goal before unsupported supervisor run", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(resolve(stateDir, "goal-queue.json"), JSON.stringify({
+    schema_version: 1,
+    items: [
+      {
+        queue_id: "blocker-queue-item",
+        title: "Blocker",
+        objective: "Blocker objective",
+        status: "queued",
+        priority: 0,
+        created_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        queue_id: "dependent-high",
+        title: "Dependent high",
+        objective: "Dependent high objective",
+        status: "queued",
+        priority: 10,
+        depends_on: ["blocker-queue-item"],
+        created_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      },
+      {
+        queue_id: "eligible-item",
+        title: "Eligible item",
+        objective: "Eligible item objective",
+        source_file: "eligible.md",
+        status: "queued",
+        priority: 1,
+        created_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:00.000Z",
+      },
+    ],
+  }));
+
+  const result = await run(["supervise", "--queue"], project);
+
+  assert.equal(result.code, 2);
+  assert.match(result.stdout, /^Running queue item eligible: Eligible item\n/);
+  assert.match(result.stderr, /Unsupported in node-cli first pass: supervise --queue/);
+  const queue = JSON.parse(await readFile(resolve(stateDir, "goal-queue.json"), "utf8"));
+  assert.equal(queue.items[0].status, "queued");
+  assert.equal(queue.items[1].status, "queued");
+  assert.equal(queue.items[2].status, "active");
+  assert.equal(queue.items[2].updated_at, "2026-01-02T03:04:05.006Z");
+  const goal = JSON.parse(await readFile(resolve(stateDir, "goal.json"), "utf8"));
+  assert.equal(goal.objective, "Eligible item objective");
+  assert.equal(goal.source_file, "eligible.md");
+  assert.equal(goal.status, "active");
+  assert.deepEqual(goal.phases, ["spec", "plan", "tasks", "implement", "verify"]);
+  assert.equal(await readFile(resolve(stateDir, "goal.lock"), "utf8"), "");
+  assert.equal(await readFile(resolve(stateDir, "goal-queue.lock"), "utf8"), "");
+});
+
+test("supervise queue reports resuming when prior state is resumable", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(resolve(stateDir, "plan.md"), "# Existing plan\n\n- Continue implementation\n");
+  await writeFile(resolve(stateDir, "goal-queue.json"), JSON.stringify({
+    schema_version: 1,
+    items: [{
+      queue_id: "resumable-queue-item",
+      title: "Resumable item",
+      objective: "Resumable item objective",
+      status: "queued",
+      priority: 1,
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:00:00.000Z",
+    }],
+  }));
+
+  const result = await run(["supervise", "--queue"], project);
+
+  assert.equal(result.code, 2);
+  assert.match(result.stdout, /^Resuming queue item resumabl: Resumable item\n/);
+  assert.doesNotMatch(result.stdout, /Running queue item/);
+  assert.match(result.stderr, /Unsupported in node-cli first pass: supervise --queue/);
+  const goal = JSON.parse(await readFile(resolve(stateDir, "goal.json"), "utf8"));
+  assert.equal(goal.objective, "Resumable item objective");
+});
+
+test("supervise queue preserves active goal conflict after activation", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(resolve(stateDir, "goal.json"), JSON.stringify({
+    schema_version: 1,
+    goal_id: "goal-1",
+    objective: "Existing active goal",
+    status: "active",
+    phases: ["spec", "plan", "tasks", "implement", "verify"],
+    created_at: "2026-01-01T00:00:00.000Z",
+    updated_at: "2026-01-01T00:00:00.000Z",
+  }));
+  await writeFile(resolve(stateDir, "goal-queue.json"), JSON.stringify({
+    schema_version: 1,
+    items: [{
+      queue_id: "target-queue-item",
+      title: "Target item",
+      objective: "Target item objective",
+      status: "queued",
+      priority: 2,
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:00:00.000Z",
+    }],
+  }));
+
+  const result = await run(["supervise", "--queue"], project);
+
+  assert.equal(result.code, 1);
+  assert.doesNotMatch(result.stdout, /Running queue item/);
+  assert.match(result.stderr, /State error: Active goal already exists: "Existing active goal"\. Pause, clear, or complete it before running queue item target-q\./);
+  const queue = JSON.parse(await readFile(resolve(stateDir, "goal-queue.json"), "utf8"));
+  assert.equal(queue.items[0].status, "active");
+  assert.equal(Object.hasOwn(queue.items[0], "reason"), false);
+  const goal = JSON.parse(await readFile(resolve(stateDir, "goal.json"), "utf8"));
+  assert.equal(goal.objective, "Existing active goal");
+  assert.equal(goal.goal_id, "goal-1");
 });
 
 test("next and resume route unsupported selections explicitly", async () => {
@@ -818,11 +1147,201 @@ test("discuss runs distinct reviewer and planner challenger approvals before fin
   assert.equal(JSON.parse(await readFile(resolve(project, ".agent-loop/state/status.json"), "utf8")).status, "CONSENSUS");
 });
 
-test("discuss discovery prepass remains explicitly unsupported", async () => {
+test("discuss --discover writes discovery prepass output before facilitator turn", async () => {
   const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
-  const result = await run(["discuss", "--task", "Build", "--discover"], project);
-  assert.equal(result.code, 2);
-  assert.match(result.stderr, /Unsupported in node-cli first pass: discuss --discover/);
+  const calls = [];
+  const agentRunner = async (command) => {
+    calls.push(command);
+    if (calls.length === 1) {
+      return {
+        status: 0,
+        stdout: `<discovery>
+## Architecture Overview
+- Settings are managed in src/settings.js.
+
+## Relevant Files
+- src/settings.js
+
+## Existing Patterns To Reuse
+- Keep command handlers small.
+
+## Integration Points
+- .agent-loop/state/preferences.md
+
+## Risk Areas
+- Preserve current config defaults.
+</discovery>`,
+        stderr: "",
+      };
+    }
+    if (calls.length === 2) {
+      return { status: 0, stdout: "Which settings should be exposed?", stderr: "" };
+    }
+    await mkdir(resolve(command.cwd, ".agent-loop"), { recursive: true });
+    await writeFile(resolve(command.cwd, ".agent-loop/preferences.md"), "- Settings: admin-visible\n");
+    return { status: 0, stdout: "All decisions captured.", stderr: "" };
+  };
+
+  const result = await run(
+    ["--simple", "discuss", "--task", "Build settings", "--discover"],
+    project,
+    {},
+    { agentRunner, readAnswer: async () => "Admin-visible settings" },
+  );
+
+  assert.equal(result.code, 0);
+  assert.equal(calls.length, 3);
+  assert.match(calls[0].args.join("\n"), /Produce a concise markdown discovery report/);
+  assert.match(calls[0].args.join("\n"), /<discovery>/);
+  assert.match(calls[1].args.join("\n"), /Discovery summary:\n## Architecture Overview/);
+  assert.equal(
+    await readFile(resolve(project, ".agent-loop/state/discovery.md"), "utf8"),
+    `## Architecture Overview
+- Settings are managed in src/settings.js.
+
+## Relevant Files
+- src/settings.js
+
+## Existing Patterns To Reuse
+- Keep command handlers small.
+
+## Integration Points
+- .agent-loop/state/preferences.md
+
+## Risk Areas
+- Preserve current config defaults.`,
+  );
+  const log = await readFile(resolve(project, ".agent-loop/state/log.txt"), "utf8");
+  assert.match(log, /━━━ Discovery Prepass ━━━/);
+  assert.match(log, /Discovery round 1\/1/);
+  assert.match(log, /Discovery complete/);
+  assert.equal(JSON.parse(await readFile(resolve(project, ".agent-loop/state/status.json"), "utf8")).status, "CONSENSUS");
+});
+
+test("discuss discovery and facilitator prompts apply prompt style and profile overlays", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  await writeFile(resolve(project, ".agent-loop.json"), JSON.stringify({
+    prompt_style: "terse",
+    prompt_profile: "xml_boundaries_v1",
+  }));
+  const calls = [];
+  const agentRunner = async (command) => {
+    calls.push(command);
+    if (calls.length === 1) {
+      return { status: 0, stdout: "<discovery>\n## Architecture Overview\n- Prompt overlays active.\n</discovery>", stderr: "" };
+    }
+    await mkdir(resolve(command.cwd, ".agent-loop"), { recursive: true });
+    await writeFile(resolve(command.cwd, ".agent-loop/preferences.md"), "- Decision: keep prompt overlays\n");
+    return { status: 0, stdout: "All decisions captured.", stderr: "" };
+  };
+
+  const result = await run(["--simple", "discuss", "--task", "Build", "--discover"], project, {}, { agentRunner });
+
+  assert.equal(result.code, 0);
+  assert.equal(calls.length, 2);
+  const discoveryPrompt = calls[0].args.join("\n");
+  assert.match(discoveryPrompt, /Read \.agent-loop\/state\/task\.md\. Survey codebase read-only only\./);
+  assert.match(discoveryPrompt, /PROMPT PROFILE: xml_boundaries_v1/);
+  assert.match(discoveryPrompt, /Keep discovery read-only and emit only the requested discovery report content\./);
+
+  const facilitatorPrompt = calls[1].args.join("\n");
+  assert.match(facilitatorPrompt, /PROMPT PROFILE: xml_boundaries_v1/);
+  assert.match(facilitatorPrompt, /Ask one question at a time\. Do not turn the discussion into implementation planning\./);
+});
+
+test("discuss --discover retries when discovery output is missing tags", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  await writeFile(resolve(project, ".agent-loop.json"), JSON.stringify({ discover_max_rounds: 2 }));
+  const calls = [];
+  const agentRunner = async (command) => {
+    calls.push(command);
+    if (calls.length === 1) {
+      return { status: 0, stdout: "I forgot the tags.", stderr: "" };
+    }
+    if (calls.length === 2) {
+      return { status: 0, stdout: "<discovery>\n## Risk Areas\n- Retry worked.\n</discovery>", stderr: "" };
+    }
+    await mkdir(resolve(command.cwd, ".agent-loop"), { recursive: true });
+    await writeFile(resolve(command.cwd, ".agent-loop/preferences.md"), "- Decision: keep retry\n");
+    return { status: 0, stdout: "All decisions captured.", stderr: "" };
+  };
+
+  const result = await run(["--simple", "discuss", "--task", "Build", "--discover"], project, {}, { agentRunner });
+
+  assert.equal(result.code, 0);
+  assert.equal(calls.length, 3);
+  assert.equal(await readFile(resolve(project, ".agent-loop/state/discovery.md"), "utf8"), "## Risk Areas\n- Retry worked.");
+  const log = await readFile(resolve(project, ".agent-loop/state/log.txt"), "utf8");
+  assert.match(log, /Discovery round 1\/2/);
+  assert.match(log, /missing <discovery> markers/);
+  assert.match(log, /Discovery round 2\/2/);
+});
+
+test("discuss runs automatic discovery when config enables discuss discovery", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  await writeFile(resolve(project, ".agent-loop.json"), JSON.stringify({
+    discover_enabled: true,
+    discover_before_discuss: true,
+  }));
+  const calls = [];
+  const agentRunner = async (command) => {
+    calls.push(command);
+    if (calls.length === 1) {
+      return { status: 0, stdout: "<discovery>\n## Architecture Overview\n- Auto discuss discovery.\n</discovery>", stderr: "" };
+    }
+    await mkdir(resolve(command.cwd, ".agent-loop"), { recursive: true });
+    await writeFile(resolve(command.cwd, ".agent-loop/preferences.md"), "- Decision: use automatic discovery\n");
+    return { status: 0, stdout: "All decisions captured.", stderr: "" };
+  };
+
+  const result = await run(["--simple", "discuss", "--task", "Build"], project, {}, { agentRunner });
+
+  assert.equal(result.code, 0);
+  assert.equal(calls.length, 2);
+  assert.match(calls[0].args.join("\n"), /Return the report between <discovery> and <\/discovery> tags/);
+  assert.equal(await readFile(resolve(project, ".agent-loop/state/discovery.md"), "utf8"), "## Architecture Overview\n- Auto discuss discovery.");
+  assert.equal(JSON.parse(await readFile(resolve(project, ".agent-loop/state/status.json"), "utf8")).status, "CONSENSUS");
+});
+
+test("plan runs automatic plan-phase discovery before the state shell", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  await writeFile(resolve(project, ".agent-loop.json"), JSON.stringify({ discover_enabled: true }));
+  const calls = [];
+  const agentRunner = async (command) => {
+    calls.push(command);
+    return { status: 0, stdout: "<discovery>\n## Relevant Files\n- src/plan.js\n</discovery>", stderr: "" };
+  };
+
+  const result = await run(["plan", "Build plan"], project, {}, { agentRunner });
+
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /Plan state initialized/);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].args.join("\n"), /Read the task from \.agent-loop\/state\/task\.md/);
+  assert.equal(await readFile(resolve(project, ".agent-loop/state/discovery.md"), "utf8"), "## Relevant Files\n- src/plan.js");
+  assert.equal(await readFile(resolve(project, ".agent-loop/state/workflow.txt"), "utf8"), "plan\n");
+});
+
+test("discovery decision helper mirrors Rust force and existing-artifact rules", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  await mkdir(stateDir, { recursive: true });
+  const config = {
+    projectDir: project,
+    stateDir,
+    discoverEnabled: false,
+    discoverBeforeDiscuss: true,
+    discoverBeforePlan: true,
+  };
+
+  assert.equal(await shouldRunDiscoveryPrepass(config, { phase: DiscoveryPhase.Discuss }), false);
+  assert.equal(await shouldRunDiscoveryPrepass(config, { explicit: true, phase: DiscoveryPhase.Discuss }), true);
+
+  config.discoverEnabled = true;
+  assert.equal(await shouldRunDiscoveryPrepass(config, { phase: DiscoveryPhase.Discuss }), true);
+  await writeFile(resolve(stateDir, "discovery.md"), "Existing discovery\n");
+  assert.equal(await shouldRunDiscoveryPrepass(config, { phase: DiscoveryPhase.Discuss }), false);
+  assert.equal(await shouldRunDiscoveryPrepass(config, { explicit: true, phase: DiscoveryPhase.Discuss }), true);
 });
 
 test("implement task runs implementer and reviewer before simple auto-consensus", async () => {
@@ -1110,24 +1629,66 @@ test("implement bounded retry writes max rounds when review never approves", asy
   assert.match(progress, /MAX_ROUNDS - missing tests round 2/);
 });
 
-test("implement needs-changes review stops at the documented partial boundary", async () => {
+test("implement retries needs-changes review without a round cap", async () => {
   const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const calls = [];
+  let reviewCount = 0;
   const agentRunner = async (command) => {
+    calls.push(command);
     if (command.args.join(" ").includes("Review implementation")) {
+      reviewCount += 1;
+      const status = reviewCount === 1
+        ? { status: "NEEDS_CHANGES", round: 1, reason: "missing tests", timestamp: "2026-01-02T03:04:05.006Z" }
+        : { status: "APPROVED", round: 2, timestamp: "2026-01-02T03:04:05.006Z" };
       await writeFile(
         resolve(command.cwd, ".agent-loop/state/status.json"),
-        JSON.stringify({ status: "NEEDS_CHANGES", round: 1, reason: "missing tests", timestamp: "2026-01-02T03:04:05.006Z" }),
+        JSON.stringify(status),
       );
-      return { status: 0, stdout: "Needs tests.\n", stderr: "" };
+      return { status: 0, stdout: `${status.status}\n`, stderr: "" };
     }
     return { status: 0, stdout: "Implemented.\n", stderr: "" };
   };
 
-  const result = await run(["implement", "--task", "Ship reporting"], project, {}, { agentRunner });
+  const result = await run(["--simple", "implement", "--task", "Ship unbounded retry"], project, {}, { agentRunner });
 
-  assert.equal(result.code, 2);
-  assert.match(result.stderr, /Implementation retry loops are not yet supported/);
-  assert.equal(JSON.parse(await readFile(resolve(project, ".agent-loop/state/status.json"), "utf8")).status, "NEEDS_CHANGES");
+  assert.equal(result.code, 0);
+  assert.equal(calls.length, 4);
+  assert.match(calls[2].args.join("\n"), /Address the reviewer's feedback in \.agent-loop\/state\/review\.md/);
+  const progress = await readFile(resolve(project, ".agent-loop/state/implement-progress.md"), "utf8");
+  assert.match(progress, /Retry: continuing to round 2/);
+  const status = JSON.parse(await readFile(resolve(project, ".agent-loop/state/status.json"), "utf8"));
+  assert.equal(status.status, "CONSENSUS");
+  assert.equal(status.round, 2);
+});
+
+test("implement logs high-watermark warning during unbounded retry", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  let reviewCount = 0;
+  const agentRunner = async (command) => {
+    if (command.args.join(" ").includes("Review implementation")) {
+      reviewCount += 1;
+      const status = reviewCount === 50
+        ? { status: "APPROVED", round: 50, timestamp: "2026-01-02T03:04:05.006Z" }
+        : { status: "NEEDS_CHANGES", round: reviewCount, reason: `missing tests round ${reviewCount}`, timestamp: "2026-01-02T03:04:05.006Z" };
+      await writeFile(
+        resolve(command.cwd, ".agent-loop/state/status.json"),
+        JSON.stringify(status),
+      );
+      return { status: 0, stdout: `${status.status}\n`, stderr: "" };
+    }
+    return { status: 0, stdout: "Implemented.\n", stderr: "" };
+  };
+
+  const result = await run(["--simple", "implement", "--task", "Ship high watermark"], project, {}, { agentRunner });
+
+  assert.equal(result.code, 0);
+  assert.equal(reviewCount, 50);
+  const status = JSON.parse(await readFile(resolve(project, ".agent-loop/state/status.json"), "utf8"));
+  assert.equal(status.status, "CONSENSUS");
+  assert.equal(status.round, 50);
+  const log = await readFile(resolve(project, ".agent-loop/state/log.txt"), "utf8");
+  const matches = log.match(/High round count in unlimited mode/g) ?? [];
+  assert.equal(matches.length, 1);
 });
 
 test("implement writes passing quality evidence and references it in review prompts", async () => {
@@ -1212,6 +1773,100 @@ test("implement quality failures are reviewer evidence and do not block Gate A",
   assert.match(quality, /--- node -e "console\.error\('quality fail'\); process\.exit\(7\)" \[FAIL\] ---/);
   assert.match(quality, /REMEDIATION: Fix quality failures\./);
   assert.match(quality, /quality fail/);
+});
+
+test("implement browser failures block review when browser evidence policy blocks", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  await writeFile(resolve(project, ".agent-loop.json"), JSON.stringify({
+    review_max_rounds: 1,
+    browser_test_commands: [{
+      command: "node -e \"console.error('browser fail'); process.exit(4)\"",
+      remediation: "Fix browser failures.",
+    }],
+  }));
+  const calls = [];
+  const agentRunner = async (command) => {
+    calls.push(command);
+    return { status: 0, stdout: "Implemented.\n", stderr: "" };
+  };
+
+  const result = await run(["implement", "--task", "Ship browser coverage"], project, {}, { agentRunner });
+
+  assert.equal(result.code, 1);
+  assert.equal(calls.length, 1);
+  const quality = await readFile(resolve(project, ".agent-loop/state/quality_checks.md"), "utf8");
+  assert.match(quality, /BROWSER\/E2E CHECKS:/);
+  assert.match(quality, /REMEDIATION: Fix browser failures\./);
+  assert.match(quality, /browser fail/);
+  const review = await readFile(resolve(project, ".agent-loop/state/review.md"), "utf8");
+  assert.match(review, /# Review Blocked By Browser\/E2E Checks/);
+  const findings = JSON.parse(await readFile(resolve(project, ".agent-loop/state/findings.json"), "utf8"));
+  assert.equal(findings.findings[0].id, "BROWSER-E2E-001");
+  const status = JSON.parse(await readFile(resolve(project, ".agent-loop/state/status.json"), "utf8"));
+  assert.equal(status.status, "MAX_ROUNDS");
+  assert.match(status.reason, /Browser\/E2E checks failed before implementation review/);
+  const progress = await readFile(resolve(project, ".agent-loop/state/implement-progress.md"), "utf8");
+  assert.match(progress, /NEEDS_CHANGES - browser\/E2E checks failed before review/);
+});
+
+test("implement browser failures warn and continue when browser evidence policy warns", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  await writeFile(resolve(project, ".agent-loop.json"), JSON.stringify({
+    browser_evidence_policy: "warn",
+    browser_test_commands: [{
+      command: "node -e \"console.error('browser warn'); process.exit(4)\"",
+    }],
+  }));
+  const calls = [];
+  const agentRunner = async (command) => {
+    calls.push(command);
+    if (calls.length === 2) {
+      await writeFile(resolve(command.cwd, ".agent-loop/state/review.md"), "Approved with browser warning.\n");
+      await writeFile(resolve(command.cwd, ".agent-loop/state/findings.json"), JSON.stringify({ round: 1, findings: [] }));
+      await writeFile(
+        resolve(command.cwd, ".agent-loop/state/status.json"),
+        JSON.stringify({ status: "APPROVED", round: 1, timestamp: "2026-01-02T03:04:05.006Z" }),
+      );
+      return { status: 0, stdout: "", stderr: "" };
+    }
+    return { status: 0, stdout: "Implemented.\n", stderr: "" };
+  };
+
+  const result = await run(["--simple", "implement", "--task", "Ship browser warning"], project, {}, { agentRunner });
+
+  assert.equal(result.code, 0);
+  assert.equal(calls.length, 2);
+  assert.match(calls[1].args.join("\n"), /Review automated check output from \.agent-loop\/state\/quality_checks\.md/);
+  const quality = await readFile(resolve(project, ".agent-loop/state/quality_checks.md"), "utf8");
+  assert.match(quality, /BROWSER\/E2E CHECKS:/);
+  assert.match(quality, /browser warn/);
+  const progress = await readFile(resolve(project, ".agent-loop/state/implement-progress.md"), "utf8");
+  assert.match(progress, /WARN - browser\/E2E checks failed before review; continuing because browser_evidence_policy=warn/);
+  assert.equal(JSON.parse(await readFile(resolve(project, ".agent-loop/state/status.json"), "utf8")).status, "CONSENSUS");
+});
+
+test("implement browser evidence gate blocks browser-facing work without browser evidence", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const calls = [];
+  const agentRunner = async (command) => {
+    calls.push(command);
+    return { status: 0, stdout: "Implemented.\n", stderr: "" };
+  };
+
+  const result = await run(["implement", "--task", "Build a frontend page with a submit button"], project, {}, { agentRunner });
+
+  assert.equal(result.code, 1);
+  assert.equal(calls.length, 1);
+  const gate = await readFile(resolve(project, ".agent-loop/state/browser-evidence-gate.md"), "utf8");
+  assert.match(gate, /Agent Loop paused before implementation review/);
+  assert.match(gate, /- `frontend`/);
+  assert.match(gate, /- `button`/);
+  const status = JSON.parse(await readFile(resolve(project, ".agent-loop/state/status.json"), "utf8"));
+  assert.equal(status.status, "AWAITING_INPUT");
+  assert.equal(status.failure_severity, "missing_feature");
+  assert.match(status.reason, /browser evidence gate paused before implementation review/);
+  const progress = await readFile(resolve(project, ".agent-loop/state/implement-progress.md"), "utf8");
+  assert.match(progress, /AWAITING_INPUT - browser evidence gate: browser-facing goals detected but no browser\/E2E command is configured/);
 });
 
 test("implement dual-agent approval path runs fresh-context Gate B and implementer signoff", async () => {
@@ -1642,11 +2297,349 @@ test("implement-verify falls back to existing plan state before verification", a
   assert.equal(JSON.parse(await readFile(resolve(project, ".agent-loop/state/status.json"), "utf8")).status, "VERIFIED");
 });
 
+test("plan-implement-verify alias runs first-pass plan, implementation, and verification", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  const calls = [];
+  const agentRunner = async (command) => {
+    calls.push(command);
+    if (calls.length === 1) {
+      return {
+        status: 0,
+        stdout: "# Plan\n\n## Canonical Acceptance Goals\n- Pong game is implemented and playable\n",
+        stderr: "",
+      };
+    }
+    if (calls.length === 2) {
+      return { status: 0, stdout: "APPROVED\n", stderr: "" };
+    }
+    if (calls.length === 4) {
+      await writeFile(
+        resolve(command.cwd, ".agent-loop/state/status.json"),
+        JSON.stringify({ status: "APPROVED", round: 1, timestamp: "2026-01-02T03:04:05.006Z" }),
+      );
+      return { status: 0, stdout: "Approved.\n", stderr: "" };
+    }
+    if (calls.length === 5) {
+      return {
+        status: 0,
+        stdout: verificationOutputForItems([
+          {
+            id: "V1",
+            plan_ref: "goal-1",
+            description: "Pong game is implemented and playable",
+            status: "passed",
+            evidence: "game files",
+            artifact_exists: true,
+            artifact_substantive: true,
+            artifact_wired: true,
+          },
+        ], "1 of 1 plan goals verified"),
+        stderr: "",
+      };
+    }
+    return { status: 0, stdout: "Implemented.\n", stderr: "" };
+  };
+
+  const result = await run([
+    "--simple",
+    "plan-implement-verify",
+    "--task",
+    "implement the pong game",
+  ], project, {}, { agentRunner });
+
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /legacy alias/);
+  assert.equal(calls.length, 5);
+  assert.deepEqual(calls.map((call) => call.provider), ["claude", "claude", "claude", "claude", "claude"]);
+  assert.match(calls[0].args.join("\n"), /Create an implementation plan/);
+  assert.match(calls[1].args.join("\n"), /Review whether the plan is actionable/);
+  assert.match(calls[2].args.join("\n"), /Implement ONLY the task/);
+  assert.match(calls[4].args.join("\n"), /acceptance verification against the original plan/);
+  assert.match(await readFile(resolve(stateDir, "plan.md"), "utf8"), /Pong game is implemented and playable/);
+  assert.equal(JSON.parse(await readFile(resolve(stateDir, "pipeline.json"), "utf8")).phases, "plan,implement,verify");
+  assert.equal(await readFile(resolve(stateDir, "workflow.txt"), "utf8"), "verify\n");
+  assert.equal(JSON.parse(await readFile(resolve(stateDir, "status.json"), "utf8")).status, "VERIFIED");
+});
+
+test("tasks-implement-verify alias runs tasks shell, implementation, and verification from a plan file", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  await writeFile(
+    resolve(project, "plan.md"),
+    "# Plan\n\n## Canonical Acceptance Goals\n- Tasks alias execution reaches verification\n",
+  );
+  const calls = [];
+  const agentRunner = async (command) => {
+    calls.push(command);
+    if (calls.length === 2) {
+      await writeFile(
+        resolve(command.cwd, ".agent-loop/state/status.json"),
+        JSON.stringify({ status: "APPROVED", round: 1, timestamp: "2026-01-02T03:04:05.006Z" }),
+      );
+      return { status: 0, stdout: "Approved.\n", stderr: "" };
+    }
+    if (calls.length === 3) {
+      return {
+        status: 0,
+        stdout: verificationOutputForItems([
+          {
+            id: "V1",
+            plan_ref: "goal-1",
+            description: "Tasks alias execution reaches verification",
+            status: "passed",
+            evidence: ".agent-loop/state/plan.md",
+            artifact_exists: true,
+            artifact_substantive: true,
+            artifact_wired: true,
+          },
+        ], "1 of 1 plan goals verified"),
+        stderr: "",
+      };
+    }
+    return { status: 0, stdout: "Implemented.\n", stderr: "" };
+  };
+
+  const result = await run([
+    "--simple",
+    "tasks-implement-verify",
+    "--file",
+    "plan.md",
+  ], project, {}, { agentRunner });
+
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /Tasks state initialized\. Runtime decomposition is unsupported/);
+  assert.match(result.stderr, /legacy alias/);
+  assert.equal(calls.length, 3);
+  assert.match(calls[0].args.join("\n"), /Implement ONLY the task/);
+  assert.match(calls[2].args.join("\n"), /acceptance verification against the original plan/);
+  assert.match(await readFile(resolve(stateDir, "task.md"), "utf8"), /Use the approved plan below/);
+  assert.match(await readFile(resolve(stateDir, "plan.md"), "utf8"), /Tasks alias execution reaches verification/);
+  assert.equal(JSON.parse(await readFile(resolve(stateDir, "pipeline.json"), "utf8")).phases, "tasks,implement,verify");
+  assert.equal(await readFile(resolve(stateDir, "workflow.txt"), "utf8"), "verify\n");
+  assert.equal(JSON.parse(await readFile(resolve(stateDir, "status.json"), "utf8")).status, "VERIFIED");
+});
+
+test("plan-implement command runs first-pass planning and implementation without alias note", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  const calls = [];
+  const agentRunner = async (command) => {
+    calls.push(command);
+    if (calls.length === 1) {
+      return {
+        status: 0,
+        stdout: "# Plan\n\n## Canonical Acceptance Goals\n- Dedicated plan implement command runs\n",
+        stderr: "",
+      };
+    }
+    if (calls.length === 2) {
+      return { status: 0, stdout: "APPROVED\n", stderr: "" };
+    }
+    if (calls.length === 4) {
+      await writeFile(
+        resolve(command.cwd, ".agent-loop/state/status.json"),
+        JSON.stringify({ status: "APPROVED", round: 1, timestamp: "2026-01-02T03:04:05.006Z" }),
+      );
+      return { status: 0, stdout: "Approved.\n", stderr: "" };
+    }
+    return { status: 0, stdout: "Implemented.\n", stderr: "" };
+  };
+
+  const result = await run(["--simple", "plan-implement", "ship the dedicated workflow"], project, {}, { agentRunner });
+
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout, "");
+  assert.doesNotMatch(result.stderr, /legacy alias/);
+  assert.equal(calls.length, 4);
+  assert.match(calls[0].args.join("\n"), /Create an implementation plan/);
+  assert.match(calls[2].args.join("\n"), /Implement ONLY the task/);
+  assert.equal(JSON.parse(await readFile(resolve(stateDir, "pipeline.json"), "utf8")).phases, "plan,implement");
+  assert.equal(await readFile(resolve(stateDir, "workflow.txt"), "utf8"), "implement\n");
+  assert.equal(JSON.parse(await readFile(resolve(stateDir, "status.json"), "utf8")).status, "CONSENSUS");
+});
+
+test("tasks-implement command runs tasks shell and implementation from a plan file", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  await writeFile(resolve(project, "plan.md"), "# Plan\n\n## Canonical Acceptance Goals\n- Dedicated tasks implement command runs\n");
+  const calls = [];
+  const agentRunner = async (command) => {
+    calls.push(command);
+    if (calls.length === 2) {
+      await writeFile(
+        resolve(command.cwd, ".agent-loop/state/status.json"),
+        JSON.stringify({ status: "APPROVED", round: 1, timestamp: "2026-01-02T03:04:05.006Z" }),
+      );
+      return { status: 0, stdout: "Approved.\n", stderr: "" };
+    }
+    return { status: 0, stdout: "Implemented.\n", stderr: "" };
+  };
+
+  const result = await run(["--simple", "tasks-implement", "--file", "plan.md"], project, {}, { agentRunner });
+
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /Tasks state initialized\. Runtime decomposition is unsupported/);
+  assert.equal(result.stderr, "");
+  assert.equal(calls.length, 2);
+  assert.match(calls[0].args.join("\n"), /Implement ONLY the task/);
+  assert.match(await readFile(resolve(stateDir, "task.md"), "utf8"), /Use the approved plan below/);
+  assert.equal(JSON.parse(await readFile(resolve(stateDir, "pipeline.json"), "utf8")).phases, "tasks,implement");
+  assert.equal(await readFile(resolve(stateDir, "workflow.txt"), "utf8"), "implement\n");
+  assert.equal(JSON.parse(await readFile(resolve(stateDir, "status.json"), "utf8")).status, "CONSENSUS");
+});
+
+test("plan-tasks-implement command runs first-pass plan, tasks shell, and implementation", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  const calls = [];
+  const agentRunner = async (command) => {
+    calls.push(command);
+    if (calls.length === 1) {
+      return {
+        status: 0,
+        stdout: "# Plan\n\n## Canonical Acceptance Goals\n- Dedicated plan tasks implement command runs\n",
+        stderr: "",
+      };
+    }
+    if (calls.length === 2) {
+      return { status: 0, stdout: "APPROVED\n", stderr: "" };
+    }
+    if (calls.length === 4) {
+      await writeFile(
+        resolve(command.cwd, ".agent-loop/state/status.json"),
+        JSON.stringify({ status: "APPROVED", round: 1, timestamp: "2026-01-02T03:04:05.006Z" }),
+      );
+      return { status: 0, stdout: "Approved.\n", stderr: "" };
+    }
+    return { status: 0, stdout: "Implemented.\n", stderr: "" };
+  };
+
+  const result = await run(["--simple", "plan-tasks-implement", "ship through tasks shell"], project, {}, { agentRunner });
+
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /Tasks state initialized\. Runtime decomposition is unsupported/);
+  assert.doesNotMatch(result.stderr, /legacy alias/);
+  assert.equal(calls.length, 4);
+  assert.match(calls[0].args.join("\n"), /Create an implementation plan/);
+  assert.match(calls[2].args.join("\n"), /Implement ONLY the task/);
+  assert.equal(JSON.parse(await readFile(resolve(stateDir, "pipeline.json"), "utf8")).phases, "plan,tasks,implement");
+  assert.equal(await readFile(resolve(stateDir, "workflow.txt"), "utf8"), "implement\n");
+  assert.equal(JSON.parse(await readFile(resolve(stateDir, "status.json"), "utf8")).status, "CONSENSUS");
+});
+
+test("implement-verify resume from implement workflow runs implementation then verification", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(resolve(stateDir, "workflow.txt"), "implement\n");
+  await writeFile(resolve(stateDir, "status.json"), JSON.stringify({ status: "NEEDS_CHANGES", round: 1, reason: "missing export" }));
+  await writeFile(resolve(stateDir, "task.md"), "Ship reporting export\n");
+  await writeFile(resolve(stateDir, "plan.md"), "## goal-1: Ship reporting export\nShip reporting export from the approved plan.\n");
+  await writeFile(resolve(stateDir, "review.md"), "Add the export.\n");
+  await writeFile(resolve(stateDir, "implement-mode.txt"), "batch\n");
+
+  const calls = [];
+  const agentRunner = async (command) => {
+    calls.push(command);
+    if (calls.length === 2) {
+      await writeFile(
+        resolve(command.cwd, ".agent-loop/state/status.json"),
+        JSON.stringify({ status: "APPROVED", round: 1, timestamp: "2026-01-02T03:04:05.006Z" }),
+      );
+      return { status: 0, stdout: "Approved.\n", stderr: "" };
+    }
+    if (calls.length === 3) {
+      return {
+        status: 0,
+        stdout: verificationOutputForItems([
+          {
+            id: "V1",
+            plan_ref: "goal-1",
+            description: "Reporting export is implemented",
+            status: "passed",
+            evidence: "src/reporting.js:1",
+            artifact_exists: true,
+            artifact_substantive: true,
+            artifact_wired: true,
+          },
+        ], "1 of 1 plan goals verified"),
+        stderr: "",
+      };
+    }
+    return { status: 0, stdout: "Implemented resume.\n", stderr: "" };
+  };
+
+  const result = await run(["--simple", "implement-verify", "--resume"], project, {}, { agentRunner });
+
+  assert.equal(result.code, 0);
+  assert.equal(calls.length, 3);
+  assert.match(calls[0].args.join("\n"), /This is the first implementation round/);
+  assert.match(calls[2].args.join("\n"), /acceptance verification against the original plan/);
+  assert.equal(await readFile(resolve(stateDir, "review.md"), "utf8"), "Approved.\n");
+  assert.equal(await readFile(resolve(stateDir, "workflow.txt"), "utf8"), "verify\n");
+  assert.equal(JSON.parse(await readFile(resolve(stateDir, "status.json"), "utf8")).status, "VERIFIED");
+});
+
+test("implement-verify resume from verify workflow resumes verification only", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  await seedConsensusState(project);
+  const stateDir = resolve(project, ".agent-loop/state");
+  await writeFile(resolve(stateDir, "workflow.txt"), "verify\n");
+  await writeFile(resolve(stateDir, "status.json"), JSON.stringify({ status: "VERIFICATION_FAILED", round: 1 }));
+  await writeFile(resolve(stateDir, "verification-progress.md"), "## Round 1\nOld failure\n");
+
+  const calls = [];
+  const result = await run(["--simple", "implement-verify", "--resume"], project, {}, {
+    agentRunner: async (command) => {
+      calls.push(command);
+      return {
+        status: 0,
+        stdout: verificationOutputForItems([
+          {
+            id: "V1",
+            plan_ref: "goal-1",
+            description: "Export endpoint exists",
+            status: "passed",
+            evidence: "src/export.js:1",
+          },
+        ], "1 of 1 plan goals verified"),
+        stderr: "",
+      };
+    },
+  });
+
+  assert.equal(result.code, 0);
+  assert.equal(calls.length, 1);
+  assert.match(calls[0].args.join("\n"), /Continue re-verification/);
+  assert.equal(JSON.parse(await readFile(resolve(stateDir, "status.json"), "utf8")).status, "VERIFIED");
+  assert.match(await readFile(resolve(stateDir, "verification-progress.md"), "utf8"), /Old failure/);
+});
+
 test("implement-verify unsupported boundaries stay explicit", async () => {
   const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
   const resume = await run(["implement-verify", "--resume"], project);
-  assert.equal(resume.code, 2);
-  assert.match(resume.stderr, /Unsupported in node-cli first pass: implement-verify --resume/);
+  assert.equal(resume.code, 1);
+  assert.match(resume.stderr, /Cannot resume implement-verify: workflow is not 'plan', 'implement', or 'verify'\./);
+
+  const planProject = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const planStateDir = resolve(planProject, ".agent-loop/state");
+  await mkdir(planStateDir, { recursive: true });
+  await writeFile(resolve(planStateDir, "workflow.txt"), "plan\n");
+  await writeFile(resolve(planStateDir, "status.json"), JSON.stringify({ status: "PENDING", round: 1 }));
+  const planResume = await run(["implement-verify", "--resume"], planProject);
+  assert.equal(planResume.code, 2);
+  assert.match(planResume.stderr, /Unsupported in node-cli first pass: implement-verify --resume plan workflow/);
+
+  const decomposeProject = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const decomposeStateDir = resolve(decomposeProject, ".agent-loop/state");
+  await mkdir(decomposeStateDir, { recursive: true });
+  await writeFile(resolve(decomposeStateDir, "workflow.txt"), "decompose\n");
+  await writeFile(resolve(decomposeStateDir, "status.json"), JSON.stringify({ status: "PENDING", round: 1 }));
+  const decomposeResume = await run(["implement-verify", "--resume"], decomposeProject);
+  assert.equal(decomposeResume.code, 1);
+  assert.match(decomposeResume.stderr, /Cannot resume implement-verify: workflow is not 'plan', 'implement', or 'verify'\./);
 
   const noTask = await run(["implement-verify"], project);
   assert.equal(noTask.code, 1);
@@ -1725,18 +2718,52 @@ test("inline quality checks are non-blocking and logged when auto_test is enable
   await assert.rejects(() => readFile(resolve(project, ".agent-loop/state/quality_checks.md"), "utf8"), /ENOENT/);
 });
 
-test("inline auto-commit remains an explicit unsupported boundary", async () => {
+test("inline auto-commit follows auto_commit gate and skips without committing", async () => {
   const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
   await writeFile(resolve(project, ".agent-loop.json"), JSON.stringify({ inline_auto_commit: true }));
 
+  const calls = [];
   const result = await run(["inline", "--task", "Ship inline mode"], project, {}, {
-    agentRunner: async () => {
-      throw new Error("agent should not run");
+    agentRunner: async (command) => {
+      calls.push(command);
+      await mkdir(resolve(command.cwd, "src"), { recursive: true });
+      await writeFile(resolve(command.cwd, "src/inline.js"), "export const inline = true;\n");
+      return { status: 0, stdout: "done\n", stderr: "" };
     },
   });
 
-  assert.equal(result.code, 2);
-  assert.match(result.stderr, /Unsupported in node-cli first pass: inline_auto_commit=true/);
+  assert.equal(result.code, 0);
+  assert.equal(calls.length, 1);
+  const log = await readFile(resolve(project, ".agent-loop/state/log.txt"), "utf8");
+  assert.match(log, /Git checkpoint skipped \(AUTO_COMMIT=0\)/);
+  assert.equal(JSON.parse(await readFile(resolve(project, ".agent-loop/state/status.json"), "utf8")).status, "COMPLETED");
+});
+
+test("inline auto-commit commits loop-owned non-state files when auto_commit is enabled", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  await git(project, ["init"]);
+  await git(project, ["config", "user.email", "agent-loop@example.test"]);
+  await git(project, ["config", "user.name", "Agent Loop"]);
+  await writeFile(resolve(project, ".agent-loop.json"), JSON.stringify({ inline_auto_commit: true, auto_commit: true }));
+  await writeFile(resolve(project, "README.md"), "# Inline checkpoint fixture\n");
+  await git(project, ["add", ".agent-loop.json", "README.md"]);
+  await git(project, ["commit", "-m", "initial"]);
+
+  const result = await run(["inline", "--task", "Ship inline mode"], project, {}, {
+    agentRunner: async (command) => {
+      await mkdir(resolve(command.cwd, "src"), { recursive: true });
+      await writeFile(resolve(command.cwd, "src/inline.js"), "export const inline = true;\n");
+      return { status: 0, stdout: "done\n", stderr: "" };
+    },
+  });
+
+  assert.equal(result.code, 0);
+  assert.equal(await git(project, ["log", "-1", "--pretty=%s"]), "agent-loop: inline: auto-commit");
+  const tree = await git(project, ["ls-tree", "-r", "--name-only", "HEAD"]);
+  assert.match(tree, /^src\/inline\.js$/m);
+  assert.doesNotMatch(tree, /^\.agent-loop\/state\/task\.md$/m);
+  const log = await readFile(resolve(project, ".agent-loop/state/log.txt"), "utf8");
+  assert.match(log, /Git checkpoint: inline: auto-commit \(1 file\(s\)\)/);
 });
 
 test("review files path runs primary reviewer and approves empty findings", async () => {
@@ -3041,23 +4068,47 @@ test("chain runs supported command steps and archives state", async () => {
   assert.equal(await readFile(resolve(project, ".agent-loop/state/archive/plan-b/task.md"), "utf8"), "Build the second thing");
 });
 
-test("chain records unsupported default step failure", async () => {
+test("chain default command runs plan-tasks-implement and archives successful state", async () => {
   const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
   await writeFile(resolve(project, "plan-a.md"), "Build the default thing");
+  const calls = [];
+  const agentRunner = async (command) => {
+    calls.push(command);
+    if (calls.length === 1) {
+      return {
+        status: 0,
+        stdout: "# Plan\n\n## Canonical Acceptance Goals\n- Chain default command runs\n",
+        stderr: "",
+      };
+    }
+    if (calls.length === 2) {
+      return { status: 0, stdout: "APPROVED\n", stderr: "" };
+    }
+    if (calls.length === 4) {
+      await writeFile(
+        resolve(command.cwd, ".agent-loop/state/status.json"),
+        JSON.stringify({ status: "APPROVED", round: 1, timestamp: "2026-01-02T03:04:05.006Z" }),
+      );
+      return { status: 0, stdout: "Approved.\n", stderr: "" };
+    }
+    return { status: 0, stdout: "Implemented.\n", stderr: "" };
+  };
 
-  const result = await run(["chain", "plan-a.md"], project);
+  const result = await run(["--simple", "chain", "plan-a.md"], project, {}, { agentRunner });
 
-  assert.equal(result.code, 1);
-  assert.match(result.stderr, /Unsupported in node-cli first pass: plan-tasks-implement/);
-  assert.match(result.stdout, /\[1\/1\] plan-a\.md -- failed/);
+  assert.equal(result.code, 0);
+  assert.equal(result.stderr, "");
+  assert.match(result.stdout, /\[1\/1\] plan-a\.md -- completed/);
+  assert.equal(calls.length, 4);
   const chainState = JSON.parse(await readFile(resolve(project, ".agent-loop/chain.json"), "utf8"));
   assert.deepEqual(chainState.results, [
     {
       file: "plan-a.md",
-      status: "failed",
-      error: "exit code 2",
+      status: "completed",
+      archive_path: ".agent-loop/state/archive/plan-a/",
     },
   ]);
+  assert.match(await readFile(resolve(project, ".agent-loop/state/archive/plan-a/plan.md"), "utf8"), /Chain default command runs/);
 });
 
 test("chain resume starts at the first incomplete result", async () => {
@@ -3104,8 +4155,7 @@ test("chain validates all input files before creating chain state", async () => 
 test("unsupported commands with Rust-style args print docs pointer", async () => {
   const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
   const cases = [
-    ["goal", "resume", "--run"],
-    ["pipeline", "--phases", "plan,implement", "--resume"],
+    ["tui"],
     ["supervise", "--phases", "spec,plan", "--resume"],
   ];
 
@@ -3274,6 +4324,627 @@ test("list-agents prints Rust-shaped JSON and elapsed on stderr", async () => {
   assert.deepEqual(deepseek.suggested_models, []);
 });
 
+test("pipeline fresh single plan phase initializes state and persists resume metadata", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  const calls = [];
+  const agentRunner = async (command) => {
+    calls.push(command);
+    return { status: 0, stdout: "<discovery>\n## Relevant Files\n- src/pipeline-plan.js\n</discovery>", stderr: "" };
+  };
+
+  const result = await run([
+    "--simple",
+    "pipeline",
+    "--phases",
+    "plan",
+    "--task",
+    "Plan pipeline state",
+    "--discover",
+    "--single-agent",
+  ], project, {}, { agentRunner });
+
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout.trim(), "Plan state initialized. Runtime execution is unsupported in node-cli first pass.");
+  assert.equal(result.stderr, "");
+  assert.equal(calls.length, 1);
+  assert.equal(await readFile(resolve(stateDir, "discovery.md"), "utf8"), "## Relevant Files\n- src/pipeline-plan.js");
+  assert.equal(await readFile(resolve(stateDir, "workflow.txt"), "utf8"), "plan\n");
+  assert.equal(await readFile(resolve(stateDir, "task.md"), "utf8"), "Plan pipeline state");
+  assert.deepEqual(JSON.parse(await readFile(resolve(stateDir, "pipeline.json"), "utf8")), {
+    schema_version: 1,
+    phases: "plan",
+    discover: true,
+    single_agent: true,
+    simple_mode: true,
+    flags: {
+      per_task: false,
+      wave: false,
+      max_retries: 2,
+      round_step: 2,
+      continue_on_fail: false,
+      fail_fast: false,
+      max_parallel: null,
+    },
+  });
+});
+
+test("pipeline fresh single spec phase reads task files and persists resume metadata", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  await writeFile(resolve(project, "request.md"), "Spec from file\n");
+
+  const result = await run(["pipeline", "--phases", "spec", "--file", "request.md"], project);
+
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout.trim(), "Spec state initialized. Runtime execution is unsupported in node-cli first pass.");
+  assert.equal(result.stderr, "");
+  assert.equal(await readFile(resolve(stateDir, "workflow.txt"), "utf8"), "spec\n");
+  assert.equal(await readFile(resolve(stateDir, "original-request.md"), "utf8"), "Spec from file\n");
+  const state = JSON.parse(await readFile(resolve(stateDir, "pipeline.json"), "utf8"));
+  assert.equal(state.phases, "spec");
+  assert.equal(state.discover, false);
+  assert.equal(state.single_agent, false);
+  assert.equal(state.simple_mode, false);
+  assert.equal(state.flags.max_parallel, null);
+});
+
+test("pipeline fresh single tasks phase preserves existing task and plan state", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(resolve(stateDir, "task.md"), "Original task\n");
+  await writeFile(resolve(stateDir, "plan.md"), "# Approved plan\n");
+
+  const result = await run(["pipeline", "--phases", "tasks"], project);
+
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout.trim(), "Tasks state initialized. Runtime decomposition is unsupported in node-cli first pass.");
+  assert.equal(result.stderr, "");
+  assert.equal(await readFile(resolve(stateDir, "workflow.txt"), "utf8"), "decompose\n");
+  assert.equal(await readFile(resolve(stateDir, "task.md"), "utf8"), "Original task\n");
+  assert.equal(await readFile(resolve(stateDir, "plan.md"), "utf8"), "# Approved plan\n");
+  const state = JSON.parse(await readFile(resolve(stateDir, "pipeline.json"), "utf8"));
+  assert.equal(state.phases, "tasks");
+  assert.equal(state.flags.max_parallel, null);
+});
+
+test("pipeline fresh single tasks phase derives task from explicit plan file", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  await writeFile(resolve(project, "approved-plan.md"), "# Approved plan\n\n- Build it\n");
+
+  const result = await run(["pipeline", "--phases", "tasks", "--file", "approved-plan.md"], project);
+
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout.trim(), "Tasks state initialized. Runtime decomposition is unsupported in node-cli first pass.");
+  assert.equal(result.stderr, "");
+  assert.equal(await readFile(resolve(stateDir, "workflow.txt"), "utf8"), "decompose\n");
+  assert.equal(
+    await readFile(resolve(stateDir, "task.md"), "utf8"),
+    "Use the approved plan below as the source of truth for task decomposition.\n\nPLAN:\n# Approved plan\n\n- Build it",
+  );
+  assert.equal(await readFile(resolve(stateDir, "plan.md"), "utf8"), "# Approved plan\n\n- Build it\n");
+  const state = JSON.parse(await readFile(resolve(stateDir, "pipeline.json"), "utf8"));
+  assert.equal(state.phases, "tasks");
+  assert.equal(state.discover, false);
+});
+
+test("pipeline fresh single tasks phase lets task override explicit plan file", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  await writeFile(resolve(project, "approved-plan.md"), "# Approved plan\n");
+
+  const result = await run([
+    "pipeline",
+    "--phases",
+    "tasks",
+    "--file",
+    "approved-plan.md",
+    "--task",
+    "Decompose this custom objective",
+  ], project);
+
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout.trim(), "Tasks state initialized. Runtime decomposition is unsupported in node-cli first pass.");
+  assert.equal(result.stderr, "");
+  assert.equal(await readFile(resolve(stateDir, "workflow.txt"), "utf8"), "decompose\n");
+  assert.equal(await readFile(resolve(stateDir, "task.md"), "utf8"), "Decompose this custom objective");
+  assert.equal(await readFile(resolve(stateDir, "plan.md"), "utf8"), "# Approved plan\n");
+  const state = JSON.parse(await readFile(resolve(stateDir, "pipeline.json"), "utf8"));
+  assert.equal(state.phases, "tasks");
+  assert.equal(state.flags.max_parallel, null);
+});
+
+test("pipeline fresh single discuss phase runs supported discussion and persists resume metadata", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  const calls = [];
+  const agentRunner = async (command) => {
+    calls.push(command);
+    if (calls.length === 1) {
+      return { status: 0, stdout: "Which users should this serve?", stderr: "" };
+    }
+    await mkdir(resolve(command.cwd, ".agent-loop"), { recursive: true });
+    await writeFile(resolve(command.cwd, ".agent-loop/preferences.md"), "- Users: internal operators\n");
+    return { status: 0, stdout: "All decisions captured.", stderr: "" };
+  };
+
+  const result = await run(
+    ["--simple", "pipeline", "--phases", "discuss", "--task", "Build a reporting flow"],
+    project,
+    {},
+    { agentRunner, readAnswer: async () => "Internal operators" },
+  );
+
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /Which users should this serve\?/);
+  assert.match(result.stdout, /Your answer:/);
+  assert.equal(result.stderr, "");
+  assert.equal(calls.length, 2);
+  assert.equal(await readFile(resolve(stateDir, "workflow.txt"), "utf8"), "discuss\n");
+  assert.deepEqual(JSON.parse(await readFile(resolve(stateDir, "pipeline.json"), "utf8")), {
+    schema_version: 1,
+    phases: "discuss",
+    discover: false,
+    single_agent: false,
+    simple_mode: true,
+    flags: {
+      per_task: false,
+      wave: false,
+      max_retries: 2,
+      round_step: 2,
+      continue_on_fail: false,
+      fail_fast: false,
+      max_parallel: null,
+    },
+  });
+  assert.equal(await readFile(resolve(project, ".agent-loop/preferences.md"), "utf8"), "- Users: internal operators\n");
+  assert.equal(JSON.parse(await readFile(resolve(stateDir, "status.json"), "utf8")).status, "CONSENSUS");
+});
+
+test("pipeline fresh single discuss phase keeps pipeline metadata when discussion fails", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  const agentRunner = async () => ({ status: 7, stdout: "failed\n", stderr: "boom\n" });
+
+  const result = await run(["pipeline", "--phases", "discuss", "--task", "Fail discussion"], project, {}, { agentRunner });
+
+  assert.equal(result.code, 1);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
+  assert.equal(await readFile(resolve(stateDir, "workflow.txt"), "utf8"), "discuss\n");
+  assert.equal(JSON.parse(await readFile(resolve(stateDir, "pipeline.json"), "utf8")).phases, "discuss");
+  const status = JSON.parse(await readFile(resolve(stateDir, "status.json"), "utf8"));
+  assert.equal(status.status, "ERROR");
+  assert.match(status.reason, /Discussion finalization failed: claude exited with code 7/);
+});
+
+test("pipeline fresh single discuss phase runs discovery and persists resume metadata", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  const calls = [];
+  const agentRunner = async (command) => {
+    calls.push(command);
+    if (calls.length === 1) {
+      return { status: 0, stdout: "<discovery>\n## Architecture Overview\n- Pipeline can discover first.\n</discovery>", stderr: "" };
+    }
+    await mkdir(resolve(command.cwd, ".agent-loop"), { recursive: true });
+    await writeFile(resolve(command.cwd, ".agent-loop/preferences.md"), "- Decision: use discovery first\n");
+    return { status: 0, stdout: "All decisions captured.", stderr: "" };
+  };
+
+  const result = await run(
+    ["--simple", "pipeline", "--phases", "discuss", "--task", "Discover first", "--discover"],
+    project,
+    {},
+    { agentRunner },
+  );
+
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
+  assert.equal(calls.length, 2);
+  assert.equal(await readFile(resolve(stateDir, "discovery.md"), "utf8"), "## Architecture Overview\n- Pipeline can discover first.");
+  assert.deepEqual(JSON.parse(await readFile(resolve(stateDir, "pipeline.json"), "utf8")), {
+    schema_version: 1,
+    phases: "discuss",
+    discover: true,
+    single_agent: false,
+    simple_mode: true,
+    flags: {
+      per_task: false,
+      wave: false,
+      max_retries: 2,
+      round_step: 2,
+      continue_on_fail: false,
+      fail_fast: false,
+      max_parallel: null,
+    },
+  });
+  assert.equal(JSON.parse(await readFile(resolve(stateDir, "status.json"), "utf8")).status, "CONSENSUS");
+});
+
+test("pipeline fresh single implement phase runs supported batch implementation and persists resume metadata", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  const calls = [];
+  const agentRunner = async (command) => {
+    calls.push(command);
+    if (calls.length === 2) {
+      await writeFile(
+        resolve(command.cwd, ".agent-loop/state/status.json"),
+        JSON.stringify({ status: "APPROVED", round: 1, timestamp: "2026-01-02T03:04:05.006Z" }),
+      );
+      return { status: 0, stdout: "Approved.\n", stderr: "" };
+    }
+    return { status: 0, stdout: "Implemented.\n", stderr: "" };
+  };
+
+  const result = await run([
+    "--simple",
+    "pipeline",
+    "--phases",
+    "implement",
+    "--task",
+    "Ship the implementation pipeline",
+    "--single-agent",
+  ], project, {}, { agentRunner });
+
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
+  assert.deepEqual(calls.map((call) => call.provider), ["claude", "claude"]);
+  assert.equal(await readFile(resolve(stateDir, "workflow.txt"), "utf8"), "implement\n");
+  assert.equal(await readFile(resolve(stateDir, "implement-mode.txt"), "utf8"), "batch\n");
+  assert.deepEqual(JSON.parse(await readFile(resolve(stateDir, "pipeline.json"), "utf8")), {
+    schema_version: 1,
+    phases: "implement",
+    discover: false,
+    single_agent: true,
+    simple_mode: true,
+    flags: {
+      per_task: false,
+      wave: false,
+      max_retries: 2,
+      round_step: 2,
+      continue_on_fail: false,
+      fail_fast: false,
+      max_parallel: null,
+    },
+  });
+  assert.equal(JSON.parse(await readFile(resolve(stateDir, "status.json"), "utf8")).status, "CONSENSUS");
+});
+
+test("pipeline fresh single implement phase keeps pipeline metadata when implementation fails", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  const agentRunner = async () => ({ status: 7, stdout: "failed\n", stderr: "boom\n" });
+
+  const result = await run(["pipeline", "--phases", "implement", "--task", "Fail after setup"], project, {}, { agentRunner });
+
+  assert.equal(result.code, 1);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
+  assert.equal(await readFile(resolve(stateDir, "workflow.txt"), "utf8"), "implement\n");
+  assert.equal(JSON.parse(await readFile(resolve(stateDir, "pipeline.json"), "utf8")).phases, "implement");
+  const status = JSON.parse(await readFile(resolve(stateDir, "status.json"), "utf8"));
+  assert.equal(status.status, "ERROR");
+  assert.match(status.reason, /claude exited with code 7/);
+});
+
+test("pipeline fresh single implement phase requires fresh task input like Rust", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(resolve(stateDir, "tasks.md"), "### Task 1: Existing task\n");
+
+  const result = await run(["pipeline", "--phases", "implement"], project);
+
+  assert.equal(result.code, 1);
+  assert.equal(result.stdout, "");
+  assert.match(result.stderr, /Config error: Task is required\. Provide task text or --file <path>\./);
+  assert.equal(await readFile(resolve(stateDir, "tasks.md"), "utf8"), "### Task 1: Existing task\n");
+});
+
+test("pipeline fresh implement,verify phases run implementation then verification", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  const calls = [];
+  const agentRunner = async (command) => {
+    calls.push(command);
+    if (calls.length === 2) {
+      await writeFile(
+        resolve(command.cwd, ".agent-loop/state/status.json"),
+        JSON.stringify({ status: "APPROVED", round: 1, timestamp: "2026-01-02T03:04:05.006Z" }),
+      );
+      return { status: 0, stdout: "Approved.\n", stderr: "" };
+    }
+    if (calls.length === 3) {
+      return {
+        status: 0,
+        stdout: verificationOutputForItems([
+          {
+            id: "V1",
+            plan_ref: "goal-1",
+            description: "Pipeline implement and verify sequence is complete",
+            status: "passed",
+            evidence: ".agent-loop/state/implement-progress.md",
+            artifact_exists: true,
+            artifact_substantive: true,
+            artifact_wired: true,
+          },
+        ], "1 of 1 plan goals verified"),
+        stderr: "",
+      };
+    }
+    return { status: 0, stdout: "Implemented.\n", stderr: "" };
+  };
+
+  const result = await run([
+    "--simple",
+    "pipeline",
+    "--phases",
+    "implement,verify",
+    "--task",
+    "# Task\nShip the implementation pipeline.\n\n## Canonical Acceptance Goals\n- Pipeline implement and verify sequence is complete",
+  ], project, {}, { agentRunner });
+
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
+  assert.equal(calls.length, 3);
+  assert.deepEqual(calls.map((call) => call.provider), ["claude", "claude", "claude"]);
+  assert.match(calls[2].args.join("\n"), /acceptance verification against the original plan/);
+  assert.equal(await readFile(resolve(stateDir, "workflow.txt"), "utf8"), "verify\n");
+  assert.equal(JSON.parse(await readFile(resolve(stateDir, "pipeline.json"), "utf8")).phases, "implement,verify");
+  assert.equal(await readFile(resolve(stateDir, "verification.md"), "utf8"), "# Verification Report\nGenerated by test verifier.");
+  const status = JSON.parse(await readFile(resolve(stateDir, "status.json"), "utf8"));
+  assert.equal(status.status, "VERIFIED");
+  assert.match(status.reason, /FreshContextSelfCheck/);
+});
+
+test("pipeline fresh implement,verify stops before verification when implementation fails", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  const calls = [];
+  const agentRunner = async (command) => {
+    calls.push(command);
+    return { status: 7, stdout: "failed\n", stderr: "boom\n" };
+  };
+
+  const result = await run([
+    "pipeline",
+    "--phases",
+    "implement,verify",
+    "--task",
+    "Fail before verification",
+  ], project, {}, { agentRunner });
+
+  assert.equal(result.code, 1);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
+  assert.equal(calls.length, 1);
+  assert.equal(await readFile(resolve(stateDir, "workflow.txt"), "utf8"), "implement\n");
+  assert.equal(JSON.parse(await readFile(resolve(stateDir, "pipeline.json"), "utf8")).phases, "implement,verify");
+  const status = JSON.parse(await readFile(resolve(stateDir, "status.json"), "utf8"));
+  assert.equal(status.status, "ERROR");
+  assert.match(status.reason, /claude exited with code 7/);
+  await assert.rejects(() => readFile(resolve(stateDir, "verification.md"), "utf8"), /ENOENT/);
+});
+
+test("pipeline fresh discuss,implement,verify phases preserve state across supported runtimes", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  const calls = [];
+  const agentRunner = async (command) => {
+    calls.push(command);
+    if (calls.length === 1) {
+      return { status: 0, stdout: "Which users should this serve?", stderr: "" };
+    }
+    if (calls.length === 2) {
+      await mkdir(resolve(command.cwd, ".agent-loop"), { recursive: true });
+      await writeFile(resolve(command.cwd, ".agent-loop/preferences.md"), "- Users: internal operators\n");
+      return { status: 0, stdout: "All decisions captured.", stderr: "" };
+    }
+    if (calls.length === 4) {
+      await writeFile(
+        resolve(command.cwd, ".agent-loop/state/status.json"),
+        JSON.stringify({ status: "APPROVED", round: 1, timestamp: "2026-01-02T03:04:05.006Z" }),
+      );
+      return { status: 0, stdout: "Approved.\n", stderr: "" };
+    }
+    if (calls.length === 5) {
+      return {
+        status: 0,
+        stdout: verificationOutputForItems([
+          {
+            id: "V1",
+            plan_ref: "goal-1",
+            description: "Runtime-only pipeline preserves state",
+            status: "passed",
+            evidence: ".agent-loop/preferences.md",
+            artifact_exists: true,
+            artifact_substantive: true,
+            artifact_wired: true,
+          },
+        ], "1 of 1 plan goals verified"),
+        stderr: "",
+      };
+    }
+    return { status: 0, stdout: "Implemented.\n", stderr: "" };
+  };
+
+  const task = "# Task\nCoordinate the supported runtime pipeline.\n\n## Canonical Acceptance Goals\n- Runtime-only pipeline preserves state";
+  const result = await run([
+    "--simple",
+    "pipeline",
+    "--phases",
+    "discuss,implement,verify",
+    "--task",
+    task,
+  ], project, {}, { agentRunner, readAnswer: async () => "Internal operators" });
+
+  assert.equal(result.code, 0);
+  assert.match(result.stdout, /Which users should this serve\?/);
+  assert.equal(result.stderr, "");
+  assert.equal(calls.length, 5);
+  assert.equal(await readFile(resolve(project, ".agent-loop/preferences.md"), "utf8"), "- Users: internal operators\n");
+  assert.equal(await readFile(resolve(stateDir, "task.md"), "utf8"), task);
+  assert.equal(await readFile(resolve(stateDir, "workflow.txt"), "utf8"), "verify\n");
+  assert.equal(JSON.parse(await readFile(resolve(stateDir, "pipeline.json"), "utf8")).phases, "discuss,implement,verify");
+  const status = JSON.parse(await readFile(resolve(stateDir, "status.json"), "utf8"));
+  assert.equal(status.status, "VERIFIED");
+});
+
+test("pipeline fresh single verify phase runs supported verification and persists resume metadata", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  const calls = [];
+  const agentRunner = async (command) => {
+    calls.push(command);
+    return {
+      status: 0,
+      stdout: verificationOutputForItems([
+        {
+          id: "V1",
+          plan_ref: "goal-1",
+          description: "Pipeline verify handoff is initialized",
+          status: "passed",
+          evidence: ".agent-loop/state/pipeline.json",
+          artifact_exists: true,
+          artifact_substantive: true,
+          artifact_wired: true,
+        },
+      ], "1 of 1 plan goals verified"),
+      stderr: "",
+    };
+  };
+
+  const result = await run([
+    "--simple",
+    "pipeline",
+    "--phases",
+    "verify",
+    "--task",
+    "# Task\nVerify pipeline handoff.\n\n## Canonical Acceptance Goals\n- Initialize pipeline verify handoff",
+  ], project, {}, { agentRunner });
+
+  assert.equal(result.code, 0);
+  assert.equal(result.stdout, "");
+  assert.equal(result.stderr, "");
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].provider, "claude");
+  assert.match(calls[0].args.join("\n"), /acceptance verification against the original plan/);
+  assert.equal(await readFile(resolve(stateDir, "workflow.txt"), "utf8"), "verify\n");
+  assert.equal(
+    await readFile(resolve(stateDir, "task.md"), "utf8"),
+    "# Task\nVerify pipeline handoff.\n\n## Canonical Acceptance Goals\n- Initialize pipeline verify handoff",
+  );
+  assert.deepEqual(JSON.parse(await readFile(resolve(stateDir, "pipeline.json"), "utf8")), {
+    schema_version: 1,
+    phases: "verify",
+    discover: false,
+    single_agent: false,
+    simple_mode: true,
+    flags: {
+      per_task: false,
+      wave: false,
+      max_retries: 2,
+      round_step: 2,
+      continue_on_fail: false,
+      fail_fast: false,
+      max_parallel: null,
+    },
+  });
+  assert.equal(await readFile(resolve(stateDir, "verification.md"), "utf8"), "# Verification Report\nGenerated by test verifier.");
+  const status = JSON.parse(await readFile(resolve(stateDir, "status.json"), "utf8"));
+  assert.equal(status.status, "VERIFIED");
+  assert.match(status.reason, /FreshContextSelfCheck/);
+});
+
+test("pipeline resume persists Rust-shaped state before delegating active workflow", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(resolve(stateDir, "workflow.txt"), "plan\n");
+  await writeFile(resolve(stateDir, "status.json"), JSON.stringify({ status: "PENDING" }));
+  await writeFile(resolve(stateDir, "plan.md"), "# Existing plan\n");
+
+  const result = await run([
+    "--simple",
+    "pipeline",
+    "--phases",
+    "plan,implement",
+    "--resume",
+    "--discover",
+    "--single-agent",
+    "--per-task",
+    "--max-retries",
+    "4",
+    "--round-step=3",
+    "--continue-on-fail",
+    "--max-parallel",
+    "5",
+  ], project);
+
+  assert.equal(result.code, 2);
+  assert.equal(result.stdout.trim().split(/\r?\n/)[0], "Plan resume shell is unsupported in node-cli first pass.");
+  assert.equal(result.stderr, "");
+  assert.deepEqual(JSON.parse(await readFile(resolve(stateDir, "pipeline.json"), "utf8")), {
+    schema_version: 1,
+    phases: "plan,implement",
+    discover: true,
+    single_agent: true,
+    simple_mode: true,
+    flags: {
+      per_task: true,
+      wave: false,
+      max_retries: 4,
+      round_step: 3,
+      continue_on_fail: true,
+      fail_fast: false,
+      max_parallel: 5,
+    },
+  });
+});
+
+test("pipeline resume records state before rejecting workflows outside requested phases", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(resolve(stateDir, "workflow.txt"), "verify\n");
+  await writeFile(resolve(stateDir, "status.json"), JSON.stringify({ status: "INTERRUPTED" }));
+
+  const result = await run(["pipeline", "--phases", "plan,implement", "--resume"], project);
+
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /State error: Current workflow 'verify' is not in requested phases: plan,implement/);
+  const state = JSON.parse(await readFile(resolve(stateDir, "pipeline.json"), "utf8"));
+  assert.equal(state.phases, "plan,implement");
+  assert.equal(state.flags.max_parallel, null);
+});
+
+test("pipeline validates phase names and order before fresh unsupported boundary", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+
+  const unknown = await run(["pipeline", "--phases", "plan,ship", "--task", "Ship it"], project);
+  assert.equal(unknown.code, 1);
+  assert.match(unknown.stderr, /Config error: unknown pipeline phase: 'ship'/);
+
+  const duplicate = await run(["pipeline", "--phases", "plan,plan", "--task", "Ship it"], project);
+  assert.equal(duplicate.code, 1);
+  assert.match(duplicate.stderr, /Config error: duplicate pipeline phase: 'plan'/);
+
+  const invalidOrder = await run(["pipeline", "--phases", "verify,plan", "--task", "Ship it"], project);
+  assert.equal(invalidOrder.code, 1);
+  assert.match(invalidOrder.stderr, /Config error: invalid pipeline phase order: verify,plan/);
+
+  const fresh = await run(["pipeline", "--phases", "spec,plan,implement", "--task", "Ship it"], project);
+  assert.equal(fresh.code, 2);
+  assert.match(fresh.stderr, /Unsupported in node-cli first pass: pipeline/);
+});
+
 test("resume dry-run selects active pipeline before interrupted workflow", async () => {
   const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
   const stateDir = resolve(project, ".agent-loop/state");
@@ -3351,6 +5022,11 @@ test("resume ignores stale supervisor checkpoint without active workflow", async
     active.stdout.trim().split(/\r?\n/)[0],
     "agent-loop supervise --phases spec,plan,tasks,implement,verify --resume",
   );
+
+  const activeRun = await run(["resume"], project);
+  assert.equal(activeRun.code, 2);
+  assert.match(activeRun.stdout, /^Resuming supervised workflow: spec,plan,tasks,implement,verify\n/);
+  assert.match(activeRun.stderr, /Unsupported in node-cli first pass: supervise/);
 });
 
 test("resume non-dry-run routes saved pipeline through unsupported handler", async () => {
@@ -3362,20 +5038,104 @@ test("resume non-dry-run routes saved pipeline through unsupported handler", asy
 
   const result = await run(["resume"], project);
   assert.equal(result.code, 2);
+  assert.match(result.stdout, /^No Supervisor checkpoint found; resuming saved pipeline: plan,implement,verify\.\n/);
   assert.match(result.stderr, /Unsupported in node-cli first pass: pipeline/);
 });
 
-test("resume with an active goal surfaces the suggested Rust CLI command", async () => {
+test("resume with a paused goal reports the Rust action-required message", async () => {
   const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
   const stateDir = resolve(project, ".agent-loop/state");
   await mkdir(stateDir, { recursive: true });
-  await writeFile(resolve(stateDir, "status.json"), JSON.stringify({ status: "PENDING" }));
-  await writeFile(resolve(stateDir, "goal.json"), JSON.stringify({ schema_version: 1, status: "paused" }));
+  await writeFile(resolve(stateDir, "goal.json"), JSON.stringify({
+    schema_version: 1,
+    goal_id: "goal-paused",
+    objective: "Paused goal objective",
+    status: "paused",
+    phases: ["spec", "plan", "tasks", "implement", "verify"],
+    created_at: "2026-01-01T00:00:00.000Z",
+    updated_at: "2026-01-01T00:00:00.000Z",
+  }));
 
   const result = await run(["resume"], project);
-  assert.equal(result.code, 2);
-  assert.match(result.stderr, /Unsupported in node-cli first pass: goal/);
-  assert.match(result.stderr, /This workflow requires the Rust CLI\. Run: agent-loop goal resume --run/);
+  assert.equal(result.code, 1);
+  assert.match(result.stdout, /^elapsed: /);
+  assert.match(
+    result.stderr,
+    /^Goal is paused: "Paused goal objective"\. Run 'agent-loop goal resume --run' to reactivate and continue, or 'agent-loop goal resume' to only mark it active\.\n/,
+  );
+});
+
+test("resume dry-run and action-required output use queue_id for deferred queue items", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(resolve(stateDir, "goal-queue.json"), JSON.stringify({
+    schema_version: 1,
+    items: [{
+      queue_id: "deferred-queue-item",
+      title: "Deferred queue item",
+      objective: "Deferred queue objective",
+      status: "deferred",
+      priority: 1,
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:00:00.000Z",
+      reason: "Deferred by user.",
+    }],
+  }));
+
+  const dryRun = await run(["resume", "--dry-run"], project);
+  assert.equal(dryRun.code, 0);
+  assert.equal(dryRun.stdout.trim().split(/\r?\n/)[0], "agent-loop queue resume deferred-queue-item --run");
+
+  const dryRunJson = await run(["--json", "resume", "--dry-run"], project);
+  assert.equal(dryRunJson.code, 0);
+  assert.deepEqual(JSON.parse(dryRunJson.stdout.trim()), {
+    type: "resume",
+    data: {
+      command: "agent-loop queue resume deferred-queue-item --run",
+      supervised: true,
+      queue_status: "deferred",
+      queue_id: "deferred-queue-item",
+    },
+  });
+
+  const resume = await run(["resume"], project);
+  assert.equal(resume.code, 1);
+  assert.match(resume.stdout, /^elapsed: /);
+  assert.match(
+    resume.stderr,
+    /^Queue item is deferred: "Deferred queue item"\. Run 'agent-loop queue resume deferred-queue-item --run' to reactivate and continue\.\n/,
+  );
+});
+
+test("resume hydrates an active queue item into goal state before runtime routing", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(resolve(stateDir, "goal-queue.json"), JSON.stringify({
+    schema_version: 1,
+    items: [{
+      queue_id: "active-queue-item",
+      title: "Active queue item",
+      objective: "Active queue objective",
+      source_file: "active.md",
+      status: "active",
+      priority: 1,
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:00:00.000Z",
+    }],
+  }));
+
+  const result = await run(["resume"], project);
+
+  assert.equal(result.code, 1);
+  assert.match(result.stderr, /No resumable state found/);
+  const goal = JSON.parse(await readFile(resolve(stateDir, "goal.json"), "utf8"));
+  assert.equal(goal.objective, "Active queue objective");
+  assert.equal(goal.source_file, "active.md");
+  assert.equal(goal.status, "active");
+  assert.deepEqual(goal.phases, ["spec", "plan", "tasks", "implement", "verify"]);
+  assert.equal(await readFile(resolve(stateDir, "goal.lock"), "utf8"), "");
 });
 
 test("resume reports interrupted-state integrity issues before next fallback", async () => {
@@ -3406,6 +5166,43 @@ test("resume reports interrupted-state integrity issues before next fallback", a
   const dryRun = await run(["resume", "--dry-run"], project);
   assert.equal(dryRun.code, 0);
   assert.equal(dryRun.stdout.trim().split(/\r?\n/)[0], "agent-loop next");
+});
+
+test("resume non-dry-run delegates interrupted workflow after preamble", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(resolve(stateDir, "status.json"), JSON.stringify({
+    status: "INTERRUPTED",
+    round: 1,
+    timestamp: "2026-01-01T00:00:00Z",
+  }));
+  await writeFile(resolve(stateDir, "workflow.txt"), "plan\n");
+  await writeFile(resolve(stateDir, "plan.md"), "# Existing plan\n");
+
+  const result = await run(["resume"], project);
+  assert.equal(result.code, 2);
+  assert.deepEqual(result.stdout.trim().split(/\r?\n/).slice(0, 2), [
+    "No Supervisor checkpoint found; resuming interrupted plan workflow.",
+    "Plan resume shell is unsupported in node-cli first pass.",
+  ]);
+  assert.equal(result.stderr, "");
+});
+
+test("resume non-dry-run prints next-routing preamble before fallback selection", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(resolve(project, ".agent-loop/preferences.md"), "# Preferences\n");
+  await writeFile(resolve(stateDir, "task.md"), "Build the saved task.\n");
+
+  const result = await run(["resume"], project);
+  assert.equal(result.code, 0);
+  assert.deepEqual(result.stdout.trim().split(/\r?\n/).slice(0, 2), [
+    "No Supervisor checkpoint found; using `agent-loop next` routing.",
+    "agent-loop plan",
+  ]);
+  assert.equal(result.stderr, "");
 });
 
 test("reset preserves decisions and wave-lock reset touches only the lock", async () => {

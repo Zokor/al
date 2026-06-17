@@ -1,8 +1,8 @@
 # Unsupported Node CLI First-Pass Commands
 
-The Node CLI first pass implements command parsing, source execution, state-path compatibility, non-destructive state helpers, `analyze-coverage`, `completions`, `init`, `list-agents`, `approve`, `reject`, `goal` lifecycle state commands, `queue` lifecycle state commands, `discuss`, standalone primary `review`, partial batch-mode `implement` fresh/existing/resume paths, `inline --task/--file`, fresh automated `verify`, first-pass `implement-verify` compose paths for fresh task/file input and existing task/plan state, shells for `spec`, `plan`, `tasks`, and `resume`, and partial `next` delegation into supported state shells.
+The Node CLI first pass implements command parsing, source execution, state-path compatibility, non-destructive state helpers, `analyze-coverage`, `completions`, `init`, `list-agents`, `approve`, `reject`, `goal` creation/lifecycle/resume-run state commands, `queue` lifecycle and resume-run state-prep commands, fresh single-phase `pipeline --phases discuss|spec|plan|tasks|implement|verify` state/runtime setup for the supported subsets, fresh runtime pipeline subsets across `discuss`, `implement`, `verify`, first-pass `plan,implement[,verify]`, and plan-backed `tasks,implement[,verify]`, `pipeline --resume` state handoff, `supervise --queue` state preparation, `discuss`, standalone primary `review`, partial batch-mode `implement` fresh/existing/resume paths, `inline --task/--file`, fresh automated `verify`, first-pass `implement-verify` compose paths for fresh task/file input, existing task/plan state, and supported `implement`/`verify` resume stages, shells for `spec`, `plan`, `tasks`, and `resume`, and partial `next` delegation into supported state shells.
 
-The production Rust CLI remains the complete implementation. Commands listed here are recognized by `node-cli` so users receive an intentional non-zero error instead of an ambiguous parser failure. Some unsupported runtime commands now parse Rust-shaped arguments first, including implement-mode flags and pipeline alias phase metadata. Node also has a shared provider command runner foundation, but these commands still do not execute until their phase orchestration is ported.
+The production Rust CLI remains the complete implementation. Commands listed here are recognized by `node-cli` so users receive an intentional non-zero error instead of an ambiguous parser failure. Pipeline aliases such as `plan-implement-verify` and `spec-plan` are no longer classified as unsupported commands; they route through `pipeline --phases ...`, print Rust's legacy-alias note, and then execute or stop according to the underlying phase support. Node also has a shared provider command runner foundation, but many broader phase orchestration paths remain partial until ported.
 
 Unsupported command names:
 
@@ -10,39 +10,6 @@ Unsupported command names:
 - `plan-implement`
 - `tasks-implement`
 - `tui`
-- `supervise`
-- `pipeline`
-- `plan-tasks-implement-verify`
-- `plan-implement-verify`
-- `tasks-implement-verify`
-- `discuss-plan-tasks-implement`
-- `discuss-plan-implement`
-- `discuss-plan-implement-verify`
-- `discuss-plan-tasks-implement-verify`
-- `plan-verify`
-- `plan-tasks`
-- `discuss-plan`
-- `discuss-spec`
-- `spec-plan`
-- `spec-plan-tasks`
-- `discuss-spec-plan`
-- `discuss-spec-plan-tasks`
-- `spec-plan-implement`
-- `spec-plan-tasks-implement`
-- `discuss-spec-plan-implement`
-- `discuss-spec-plan-tasks-implement`
-- `spec-plan-verify`
-- `spec-plan-tasks-verify`
-- `discuss-spec-plan-verify`
-- `discuss-spec-plan-tasks-verify`
-- `spec-plan-implement-verify`
-- `spec-plan-tasks-implement-verify`
-- `discuss-spec-plan-implement-verify`
-- `discuss-spec-plan-tasks-implement-verify`
-- `discuss-plan-tasks`
-- `plan-tasks-verify`
-- `discuss-plan-verify`
-- `discuss-plan-tasks-verify`
 
 Unsupported commands print:
 
@@ -55,19 +22,25 @@ See node-cli/docs/unsupported.md for supported first-pass behavior.
 
 `analyze-coverage` is implemented for existing `spec.md` and `tasks.md` state. It reports sorted `REQ-###` coverage, orphan task headings, plain/JSON output, and Rust-compatible exit codes.
 
-`discuss` is partially implemented: the facilitator/progress/resume loop runs through the shared provider primitive, but `discuss --discover` still returns an explicit unsupported error until discovery prepass parity is ported. Compound discuss aliases remain unsupported.
+`discuss` is partially implemented: the facilitator/progress/resume loop runs through the shared provider primitive, and explicit `discuss --discover` or `discover_enabled=true` with `discover_before_discuss=true` runs the discovery prepass before the facilitator loop, writes `discovery.md`, and retries up to `discover_max_rounds` / `DISCOVER_MAX_ROUNDS`. `prompt_style` / `AGENT_LOOP_PROMPT_STYLE` and `prompt_profile` / `PROMPT_PROFILE` are loaded with Rust-shaped precedence for the currently executed discovery and discuss prompts; phase overlays apply to those prompts, while system overlays and `progressive_context` / `PROGRESSIVE_CONTEXT` state manifests apply through provider invocations. Unported phase prompts and compound discuss aliases remain unsupported first-pass behavior.
 
-`implement` is partially implemented for fresh `implement --task <text>` / `implement --file <path>`, for batch-mode `implement` from existing `tasks.md` or `plan.md` state, and for `implement --resume` when the persisted/default implementation mode is batch. It initializes or resumes implement state, runs the implementer, runs `auto_test` quality commands as reviewer evidence, runs the same-context reviewer, can retry bounded batch `NEEDS_CHANGES` rounds when `review_max_rounds` / `REVIEW_MAX_ROUNDS` is positive, auto-consenses simple/single-agent approvals, runs the dual-agent approval path through Gate B fresh-context review plus implementer signoff, verifies Gate B findings before either signoff or bounded retry, and handles Gate C disputed late findings. Unlimited retry parity, per-task/wave execution and resume, browser-blocking implementation evidence, stuck/debugger handling, compound phases, and git checkpoints remain unsupported first-pass behavior.
+`implement` is partially implemented for fresh `implement --task <text>` / `implement --file <path>`, for batch-mode `implement` from existing `tasks.md` or `plan.md` state, and for `implement --resume` when the persisted/default implementation mode is batch. It initializes or resumes implement state, runs the implementer, runs `auto_test` quality commands and configured browser/E2E checks as reviewer evidence, applies browser-blocking review synthesis when `browser_evidence_policy=block`, applies the missing-browser-evidence gate for browser-facing work, runs the same-context reviewer, retries batch `NEEDS_CHANGES` rounds until approval or `MAX_ROUNDS` when `review_max_rounds` / `REVIEW_MAX_ROUNDS` is positive, logs Rust-threshold high-watermark warnings during unbounded retries, auto-consenses simple/single-agent approvals, runs the dual-agent approval path through Gate B fresh-context review plus implementer signoff, verifies Gate B findings before either signoff or retry, and handles Gate C disputed late findings. Per-task/wave execution and resume, stuck/debugger handling, compound phases, and git checkpoints remain unsupported first-pass behavior.
 
-`implement-verify` is partially implemented for fresh `implement-verify --task <text>` / `implement-verify --file <path>` and for existing `tasks.md` or `plan.md` state by composing the supported first-pass `implement` and `verify` paths. `implement-verify --resume`, per-task/wave execution, retry/fix-loop recovery, and Rust-vs-Node golden parity remain unsupported first-pass behavior.
+`implement-verify` is partially implemented for fresh `implement-verify --task <text>` / `implement-verify --file <path>`, for existing `tasks.md` or `plan.md` state, and for `implement-verify --resume` when state is already in `implement` or `verify`. It composes the supported first-pass `implement` and `verify` paths, resumes implementation before verification for `implement` state, and delegates directly to `verify --resume` for `verify` state. Plan-stage resume chaining, standalone review workflow resume, per-task/wave execution, retry/fix-loop recovery, and Rust-vs-Node golden parity remain unsupported first-pass behavior.
 
-`inline` is partially implemented for fresh `inline --task <text>` and `inline --file <path>`. It writes Rust-compatible `original-request.md`, `task.md`, `workflow.txt`, and `status.json`, invokes the implementer once through the shared provider primitive, and runs non-blocking implementation quality checks only when both `inline_quality_check` and `auto_test` are enabled. `inline_auto_commit=true` remains unsupported because git checkpoint parity is not ported.
+`inline` is partially implemented for fresh `inline --task <text>` and `inline --file <path>`. It writes Rust-compatible `original-request.md`, `task.md`, `workflow.txt`, and `status.json`, invokes the implementer once through the shared provider primitive, and runs non-blocking implementation quality checks only when both `inline_quality_check` and `auto_test` are enabled. `inline_auto_commit=true` now attempts a Rust-shaped checkpoint after successful inline execution, but only commits when `auto_commit=true`; `.agent-loop/state/**` is excluded from the checkpoint.
+
+`pipeline` is partially implemented for deterministic state setup and resume routing. Fresh single-phase `pipeline --phases discuss|spec|plan|tasks|implement|verify` delegates through existing Node phase/runtime paths and persists Rust-shaped `.agent-loop/state/pipeline.json`; the `spec` and standalone `plan` starts run supported discovery prepasses before their state-only runtime boundary, the `tasks` start follows Rust plan/task selection for existing state, explicit plan files, and task overrides, `discuss` uses the supported facilitator loop and discovery settings, `implement` uses the supported batch implementation subset with pipeline metadata written before runtime failure can occur, and `verify` initializes fresh verify state from pipeline task input before entering the supported verifier round. Fresh multi-phase pipelines composed only of `discuss`, `implement`, and `verify` run in order, preserve accumulated state between supported runtime phases, transition workflow/status before each continuation phase, and stop before later phases when an earlier phase fails. Fresh `pipeline --phases plan,implement` and `pipeline --phases plan,implement,verify` now run a narrow first-pass planning runtime: planner writes `plan.md`, reviewer must approve it, then the supported batch implement and verify paths continue. Fresh `pipeline --phases tasks,implement` and `tasks,implement,verify` now run when a plan file or existing `plan.md` supplies the tasks phase, with task decomposition still represented by the existing state shell. Legacy pipeline aliases dispatch through these paths and print Rust's alias note. `pipeline --resume` validates phase names, duplicate phases, phase order, and tasks-without-plan state, writes Rust-shaped `.agent-loop/state/pipeline.json`, verifies the active workflow belongs to the requested phases, and delegates to the existing Node resume command shells. Discovery outside the supported single-phase `spec`/`plan` and discuss paths, planning revision/adversarial/signoff loops, spec-leading aliases, real task-decomposition runtime, per-task/wave implement modes, and broader multi-phase orchestration that depends on unported `spec`/`tasks` runtimes remain unsupported first-pass behavior.
 
 `approve plan` and `reject plan --reason <reason>` are implemented for pending plan approval gates. They write Rust-compatible response files under `.agent-loop/state/decisions/<decision_id>/response.json` and `.agent-loop/state/decision_response.json`. Other phases are rejected because the Rust CLI currently supports only plan approval through these commands.
 
-`goal status`, `goal pause`, `goal resume`, and `goal clear` are implemented as lifecycle-only state commands against Rust-compatible `.agent-loop/state/goal.json`. Goal creation still starts the Rust supervisor workflow, so `goal <objective>` / `goal --objective <text>` / `goal --file <path>` remain unsupported runtime behavior. `goal resume --run` also remains unsupported because it re-enters the workflow resume path.
+`resume` is partially implemented for deterministic state routing. It supports Rust-shaped dry-run/no-state output, interrupted-state integrity errors, supervisor/pipeline selection, paused/budget-limited goal action messages, deferred/blocked queue item action messages using the persisted `queue_id`, active queue item hydration into `.agent-loop/state/goal.json` before runtime routing, Rust pre-runtime messages before supervisor/pipeline/interrupted workflow/`next` fallback handoff, and interrupted workflow delegation into the existing Node resume command shells. Runtime continuation into broader supervisor, pipeline, and phase execution remains partial.
 
-`queue add`, `queue list`, `queue status`, `queue pause`, `queue resume`, and `queue cancel` are implemented as lifecycle-only state commands against Rust-compatible `.agent-loop/state/goal-queue.json`. `queue resume <id> --run` remains unsupported because it activates and runs supervisor workflow execution.
+`goal <objective>`, `goal --objective <text>`, and `goal --file <path>` now create Rust-compatible `.agent-loop/state/goal.json`, print the active goal line, and then stop at the explicit unsupported supervisor-run boundary. `goal status`, `goal pause`, `goal resume`, and `goal clear` are implemented as lifecycle state commands against the same file. `goal resume --run` marks the goal active, clears its pause reason, and then stops at the explicit unsupported resume-orchestration boundary.
+
+`queue add`, `queue list`, `queue status`, `queue pause`, `queue resume`, and `queue cancel` are implemented as lifecycle state commands against Rust-compatible `.agent-loop/state/goal-queue.json`. `queue resume <id> --run` marks the item runnable, activates it, defers any previous active run, creates active `.agent-loop/state/goal.json`, and then stops at the explicit unsupported supervisor-run boundary.
+
+`supervise --queue` is partially implemented for Rust-shaped state preparation. It rejects task/file/resume combinations, activates the current active run or next eligible queued item using priority and dependency rules, creates active `.agent-loop/state/goal.json`, prints `Running queue item` or `Resuming queue item` from the Rust-shaped resumable-state predicate, and then stops at the explicit unsupported supervisor-run boundary. Other `supervise` forms still return the unsupported supervisor boundary.
 
 `review` is partially implemented for standalone review. It prepares `changes.md` from `--files`, `--base`, or the working tree, runs the primary reviewer, approves empty findings, detects reviewer protocol failures, runs dual-agent adversarial validation for primary findings, and hands confirmed findings to the supported batch `implement --resume` path. Remaining fix-loop gaps are inherited from `implement`, including per-task/wave behavior and broader parity evidence.
 

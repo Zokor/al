@@ -158,7 +158,7 @@ export async function runNext(cli, context) {
   return handleUnsupportedCommand(action, context);
 }
 
-function runResumeWorkflowSelection(workflow, cli, context) {
+export function runResumeWorkflowSelection(workflow, cli, context) {
   if (workflow === "spec") {
     return runSpec({ ...cli, command: "spec", commandArgs: { resume: true } }, context);
   }

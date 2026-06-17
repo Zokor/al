@@ -202,6 +202,16 @@ export const PARITY_SCENARIOS = Object.freeze([
     },
   },
   {
+    name: "resume-dry-run-deferred-queue",
+    args: ["resume", "--dry-run"],
+    prepare: prepareDeferredQueueResume,
+  },
+  {
+    name: "json-resume-dry-run-deferred-queue",
+    args: ["--json", "resume", "--dry-run"],
+    prepare: prepareDeferredQueueResume,
+  },
+  {
     name: "reset-empty",
     args: ["reset"],
   },
@@ -290,6 +300,10 @@ export const PARITY_SCENARIOS = Object.freeze([
     args: ["queue", "status"],
   },
   {
+    name: "supervise-queue-empty",
+    args: ["supervise", "--queue"],
+  },
+  {
     name: "inline-missing-task",
     args: ["inline"],
   },
@@ -326,6 +340,22 @@ export const PARITY_SCENARIOS = Object.freeze([
     },
   },
 ]);
+
+async function prepareDeferredQueueResume(projectDir) {
+  await writeProjectFile(projectDir, ".agent-loop/state/goal-queue.json", `${JSON.stringify({
+    schema_version: 1,
+    items: [{
+      queue_id: "deferred-queue-item",
+      title: "Deferred queue item",
+      objective: "Deferred queue objective",
+      status: "deferred",
+      priority: 1,
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:00:00.000Z",
+      reason: "Deferred by user.",
+    }],
+  })}\n`);
+}
 
 export function normalizeOutput(text) {
   return String(text ?? "")

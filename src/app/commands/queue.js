@@ -3,18 +3,16 @@ import { resolve } from "node:path";
 import { loadConfig } from "../../config/index.js";
 import {
   addQueueItem,
+  activateQueueItem,
   QueueStatus,
   readQueue,
   setQueueItemStatus,
   shortQueueId,
 } from "../../state/queue.js";
 import { handleUnsupportedCommand } from "../../unsupported/handler.js";
+import { prepareQueueRunGoal } from "./queueRunState.js";
 
 export async function runQueue(cli, context) {
-  if (cli.commandArgs.queueCommand === "resume" && cli.commandArgs.run) {
-    return handleUnsupportedCommand("queue resume --run", context);
-  }
-
   const config = await loadConfig(context.cwd, cli, context);
   switch (cli.commandArgs.queueCommand) {
     case "add":
@@ -26,7 +24,7 @@ export async function runQueue(cli, context) {
     case "pause":
       return mutateQueueItem(config, context, cli.commandArgs.queueId, QueueStatus.Deferred, "Deferred by user.", "deferred");
     case "resume":
-      return resumeQueueItem(config, context, cli.commandArgs.queueId);
+      return resumeQueueItem(config, context, cli.commandArgs.queueId, { run: cli.commandArgs.run });
     case "cancel":
       return mutateQueueItem(config, context, cli.commandArgs.queueId, QueueStatus.Cancelled, "Cancelled by user.", "cancelled");
     default:
@@ -93,7 +91,7 @@ async function mutateQueueItem(config, context, queueId, status, reason, verb) {
   return 0;
 }
 
-async function resumeQueueItem(config, context, queueId) {
+async function resumeQueueItem(config, context, queueId, { run = false } = {}) {
   const item = await setQueueItemStatus(config, queueId, QueueStatus.Queued);
   if (!item) {
     if (!config.jsonMode) {
@@ -104,7 +102,19 @@ async function resumeQueueItem(config, context, queueId) {
   if (!config.jsonMode) {
     context.stdout.write(`Queue item runnable: ${shortQueueId(item.queue_id)} ${item.title}\n`);
   }
+  if (run) {
+    return prepareQueueRunAndReportUnsupported(config, context, item);
+  }
   return 0;
+}
+
+async function prepareQueueRunAndReportUnsupported(config, context, item) {
+  const activated = await activateQueueItem(config, item.queue_id);
+  await prepareQueueRunGoal(config, activated);
+  if (!config.jsonMode) {
+    context.stdout.write(`Resuming queue item ${shortQueueId(activated.queue_id)}: ${activated.title}\n`);
+  }
+  return handleUnsupportedCommand("queue resume --run", context);
 }
 
 function writeQueueItemOutput(context, jsonMode, item) {

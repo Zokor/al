@@ -5,10 +5,12 @@ import { handleUnsupportedCommand } from "../../unsupported/handler.js";
 import { appendEvent } from "../../state/events.js";
 import { archiveState } from "../../state/archive.js";
 import { chainPath } from "../../state/paths.js";
+import { IMPLEMENTATION_WORKFLOW_DEFINITIONS } from "../pipelineAliases.js";
 import { runImplement } from "./implement.js";
 import { runImplementVerify } from "./implementVerify.js";
 import { runInline } from "./inline.js";
 import { runPlan, runSpec } from "./phases.js";
+import { runPipeline } from "./pipeline.js";
 
 const ChainStatus = Object.freeze({
   Pending: "pending",
@@ -156,6 +158,9 @@ async function dispatchChainStep(command, task, resume, parentCli, context) {
 }
 
 function chainRunner(command) {
+  if (IMPLEMENTATION_WORKFLOW_DEFINITIONS[command]) {
+    return runPipeline;
+  }
   return {
     spec: runSpec,
     plan: runPlan,
@@ -166,6 +171,12 @@ function chainRunner(command) {
 }
 
 function chainCommandArgs(command, task, resume) {
+  const implementationWorkflow = IMPLEMENTATION_WORKFLOW_DEFINITIONS[command];
+  if (implementationWorkflow) {
+    return resume
+      ? { phases: implementationWorkflow.phases, resume: true, flags: defaultImplementFlags() }
+      : { phases: implementationWorkflow.phases, task, positional: implementationWorkflow.taskStyle === "positional" ? [task] : [], flags: defaultImplementFlags() };
+  }
   if (command === "spec" || command === "plan") {
     return resume ? { positional: [], resume: true } : { positional: [task] };
   }

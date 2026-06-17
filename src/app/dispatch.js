@@ -1,6 +1,7 @@
 import { formatHelpText } from "./help.js";
 import { handleVersion } from "./version.js";
 import { DispatchKind } from "./dispatchTypes.js";
+import { IMPLEMENTATION_WORKFLOW_COMMANDS, PIPELINE_ALIAS_COMMANDS } from "./pipelineAliases.js";
 import { UNSUPPORTED_COMMAND_SET } from "../unsupported/commands.js";
 import { handleUnsupportedCommand } from "../unsupported/handler.js";
 import { runAnalyzeCoverage } from "./commands/analyzeCoverage.js";
@@ -16,11 +17,13 @@ import { runInit } from "./commands/init.js";
 import { runListAgents } from "./commands/listAgents.js";
 import { runNext } from "./commands/next.js";
 import { runPlan, runSpec, runTasks } from "./commands/phases.js";
+import { runPipeline } from "./commands/pipeline.js";
 import { runQueue } from "./commands/queue.js";
 import { runReview } from "./commands/review.js";
 import { runReset } from "./commands/reset.js";
 import { runResume } from "./commands/resume.js";
 import { runStatus } from "./commands/status.js";
+import { runSupervise } from "./commands/supervise.js";
 import { runVerify } from "./commands/verify.js";
 
 export function dispatchFromCli(cli) {
@@ -29,6 +32,9 @@ export function dispatchFromCli(cli) {
   }
   if (cli.command === "version") {
     return { kind: DispatchKind.Version, cli };
+  }
+  if (PIPELINE_ALIAS_COMMANDS.has(cli.command) || IMPLEMENTATION_WORKFLOW_COMMANDS.has(cli.command)) {
+    return { kind: DispatchKind.Pipeline, cli };
   }
   if (UNSUPPORTED_COMMAND_SET.has(cli.command)) {
     return { kind: DispatchKind.Unsupported, command: cli.command, cli };
@@ -51,6 +57,8 @@ export function dispatchFromCli(cli) {
     review: DispatchKind.Review,
     goal: DispatchKind.Goal,
     queue: DispatchKind.Queue,
+    pipeline: DispatchKind.Pipeline,
+    supervise: DispatchKind.Supervise,
     "list-agents": DispatchKind.ListAgents,
     init: DispatchKind.Init,
     completions: DispatchKind.Completions,
@@ -101,6 +109,10 @@ export async function executeDispatch(dispatch, context) {
       return runGoal(dispatch.cli, context);
     case DispatchKind.Queue:
       return runQueue(dispatch.cli, context);
+    case DispatchKind.Pipeline:
+      return runPipeline(dispatch.cli, context);
+    case DispatchKind.Supervise:
+      return runSupervise(dispatch.cli, context);
     case DispatchKind.ListAgents:
       return runListAgents(dispatch.cli, context);
     case DispatchKind.Init:

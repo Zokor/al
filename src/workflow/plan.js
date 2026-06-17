@@ -33,12 +33,20 @@ function requireTaskContent(content, message) {
 
 export async function loadPlanForTasksPhase(config, commandArgs) {
   const plan = commandArgs.file
-    ? await readFile(resolve(config.projectDir, commandArgs.file), "utf8")
+    ? await readPlanFile(config.projectDir, commandArgs.file)
     : await readStateFile(config, "plan.md");
   if (!plan.trim()) {
     throw new Error("No plan found. Run 'agent-loop plan' first.");
   }
   return plan;
+}
+
+async function readPlanFile(projectDir, file) {
+  try {
+    return await readFile(resolve(projectDir, file), "utf8");
+  } catch (error) {
+    throw new Error(`Config error: Failed to read plan file '${file}': ${error.message ?? error}`);
+  }
 }
 
 export async function preserveOrDeriveTask(config, planContent) {
@@ -49,4 +57,18 @@ export async function preserveOrDeriveTask(config, planContent) {
   const derived = planContent.trim().slice(0, 500);
   await writeStateFile(config, "task.md", derived);
   return derived;
+}
+
+export async function selectPipelineTasksTask(config, planContent, commandArgs) {
+  if (commandArgs.task !== undefined) {
+    return requireTaskContent(commandArgs.task, "Config error: Task cannot be empty.");
+  }
+  if (commandArgs.file) {
+    return buildDecompositionTaskFromPlan(planContent);
+  }
+  return preserveOrDeriveTask(config, planContent);
+}
+
+export function buildDecompositionTaskFromPlan(planContent) {
+  return `Use the approved plan below as the source of truth for task decomposition.\n\nPLAN:\n${planContent.trim()}`;
 }

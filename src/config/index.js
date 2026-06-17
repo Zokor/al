@@ -4,16 +4,21 @@ import { fileURLToPath } from "node:url";
 import { RUST_KNOWN_FILE_CONFIG_KEYS } from "./fileConfigSchema.js";
 import { REGISTERED_PROVIDERS, assertRegisteredProvider, defaultReviewerFor } from "./agentRegistry.js";
 import { parseSlotProfile } from "./slotProfiles.js";
+import { normalizePromptStyle, resolvePromptProfile } from "./promptProfile.js";
 import { readJsonConfig } from "./json.js";
 import { stateDirForSession } from "../state/paths.js";
 
 const MIGRATE_SCRIPT_PATH = resolve(dirname(fileURLToPath(import.meta.url)), "../../scripts/migrate-config.js");
 
 const ROLE_SLOTS = ["implementer", "reviewer", "planner", "discoverer", "verifier", "supervisor_agent"];
-const ACTION_KEYS = new Set(["plan", "tasks", "implement", "review", "discuss", "discover", "verify", "debugger", "compound", "supervisor"]);
+const ACTION_NAMES = Object.freeze(["plan", "tasks", "implement", "review", "discuss", "discover", "verify", "debugger", "compound", "supervisor"]);
+const ACTION_KEYS = new Set(ACTION_NAMES);
 const MODEL_ENTRY_KEYS = new Set(["model", "effort"]);
 const EFFORTS = new Set(["minimal", "low", "medium", "high", "max", "xhigh"]);
 const BROWSER_EVIDENCE_POLICIES = new Set(["off", "warn", "block"]);
+const PLANNER_PERMISSION_MODES = new Set(["default", "plan"]);
+const DEFAULT_CLAUDE_ALLOWED_TOOLS = "Bash,Read,Edit,Write,Grep,Glob,WebFetch";
+const DEFAULT_REVIEWER_ALLOWED_TOOLS = "Read,Grep,Glob,WebFetch";
 
 function validateKnownRootKeys(fileConfig) {
   for (const key of Object.keys(fileConfig)) {
@@ -71,6 +76,7 @@ function validateModels(models) {
 
 export function validateFileConfig(fileConfig) {
   validateKnownRootKeys(fileConfig);
+  normalizePromptStyle(fileConfig.prompt_style);
   for (const slot of ROLE_SLOTS) {
     parseSlotProfile(fileConfig[slot], slot, ".agent-loop.json");
   }
@@ -88,7 +94,14 @@ function envBool(name, env) {
   if (env[name] === undefined) {
     return undefined;
   }
-  return env[name] === "true";
+  const value = String(env[name]).toLowerCase();
+  if (["1", "true", "yes", "on"].includes(value)) {
+    return true;
+  }
+  if (["0", "false", "no", "off"].includes(value)) {
+    return false;
+  }
+  return undefined;
 }
 
 function envUnsignedInteger(name, env) {
@@ -111,9 +124,74 @@ function fileUnsignedInteger(value, key) {
   return value;
 }
 
+function requirePositiveInteger(value, key) {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (value < 1) {
+    throw new Error(`${key} must be >= 1. Set ${key.toUpperCase()} or ${key} in .agent-loop.json to a positive value.`);
+  }
+  return value;
+}
+
 function envTrimmedString(name, env) {
   const value = env[name];
   return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function fileTrimmedString(value) {
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function normalizeStringList(value, key) {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`${key} must be an array`);
+  }
+  return value
+    .map((entry) => (typeof entry === "string" ? entry.trim() : ""))
+    .filter(Boolean);
+}
+
+function normalizePlannerPermissionMode(value) {
+  if (value === undefined) {
+    return "default";
+  }
+  if (!PLANNER_PERMISSION_MODES.has(value)) {
+    throw new Error(`planner_permission_mode must be one of ["default", "plan"], got "${value}"`);
+  }
+  return value;
+}
+
+function sessionPersistenceEnabled({ newContext, envName, env, fileValue, defaultValue }) {
+  if (newContext) {
+    return false;
+  }
+  return envBool(envName, env) ?? fileValue ?? defaultValue;
+}
+
+function loadEnvActionOverrides(env) {
+  const result = {};
+  for (const action of ACTION_NAMES) {
+    const upper = action.toUpperCase();
+    const model = envTrimmedString(`AGENT_LOOP_${upper}_MODEL`, env);
+    const effort = envTrimmedString(`AGENT_LOOP_${upper}_EFFORT`, env);
+    if (effort !== undefined && !EFFORTS.has(effort)) {
+      throw new Error(`unknown effort level '${effort}': expected one of ${Array.from(EFFORTS).join(", ")}`);
+    }
+    if (model !== undefined || effort !== undefined) {
+      result[action] = {};
+      if (model !== undefined) {
+        result[action].model = model;
+      }
+      if (effort !== undefined) {
+        result[action].effort = effort;
+      }
+    }
+  }
+  return result;
 }
 
 function normalizeQualityCommands(value, key) {
@@ -238,19 +316,38 @@ export async function loadConfig(projectDir, cli = {}, { env = process.env, now,
   const qualityCommands = normalizeQualityCommands(fileConfig.quality_commands, "quality_commands");
   const browserTestCommands = normalizeQualityCommands(fileConfig.browser_test_commands, "browser_test_commands");
   const browserEvidencePolicy = normalizeBrowserEvidencePolicy(envTrimmedString("BROWSER_EVIDENCE_POLICY", env) ?? fileConfig.browser_evidence_policy ?? "block");
+  const promptStyle = normalizePromptStyle(envTrimmedString("AGENT_LOOP_PROMPT_STYLE", env) ?? fileConfig.prompt_style ?? "normal");
+  const { promptProfile, promptOverlays } = await resolvePromptProfile(
+    envTrimmedString("PROMPT_PROFILE", env) ?? fileConfig.prompt_profile,
+    projectDir,
+  );
+  const newContext = Boolean(cliGlobals.newContext) || (envBool("NEW_CONTEXT", env) ?? fileConfig.new_context ?? false);
   return {
     projectDir,
     stateDir: stateDirForSession(projectDir, cliGlobals.session),
     session: cliGlobals.session,
     jsonMode: Boolean(cliGlobals.json),
-    newContext: Boolean(cliGlobals.newContext),
+    newContext,
     simpleMode: Boolean(cliGlobals.simple),
     requirementsWorkflow: cliGlobals.requirementsWorkflow ?? fileConfig.requirements_workflow ?? "legacy",
+    promptStyle,
+    promptProfile,
+    promptOverlays,
+    progressiveContext: envBool("PROGRESSIVE_CONTEXT", env) ?? fileConfig.progressive_context ?? false,
     nextSkipDiscuss: env.NEXT_SKIP_DISCUSS === "true" || Boolean(fileConfig.next_skip_discuss),
     reviewMaxRounds: envUnsignedInteger("REVIEW_MAX_ROUNDS", env) ?? fileUnsignedInteger(fileConfig.review_max_rounds, "review_max_rounds") ?? 0,
+    discoverEnabled: envBool("DISCOVER_ENABLED", env) ?? fileConfig.discover_enabled ?? false,
+    discoverMaxRounds: requirePositiveInteger(
+      envUnsignedInteger("DISCOVER_MAX_ROUNDS", env) ?? fileUnsignedInteger(fileConfig.discover_max_rounds, "discover_max_rounds"),
+      "discover_max_rounds",
+    ) ?? 1,
+    discoverBeforeDiscuss: envBool("DISCOVER_BEFORE_DISCUSS", env) ?? fileConfig.discover_before_discuss ?? false,
+    discoverBeforePlan: envBool("DISCOVER_BEFORE_PLAN", env) ?? fileConfig.discover_before_plan ?? true,
     discussMaxRounds: envUnsignedInteger("DISCUSS_MAX_ROUNDS", env) ?? fileConfig.discuss_max_rounds ?? 0,
     diffMaxLines: envUnsignedInteger("DIFF_MAX_LINES", env) ?? fileConfig.diff_max_lines ?? 500,
     batchImplement: envBool("BATCH_IMPLEMENT", env) ?? fileConfig.batch_implement ?? true,
+    autoCommit: envBool("AUTO_COMMIT", env) ?? fileConfig.auto_commit ?? false,
+    autoPush: envBool("AUTO_PUSH", env) ?? fileConfig.auto_push ?? false,
     autoTest: envBool("AUTO_TEST", env) ?? fileConfig.auto_test ?? false,
     verifyAutoTest: envBool("VERIFY_AUTO_TEST", env) ?? fileConfig.verify_auto_test ?? true,
     verifyBrowserTest: envBool("VERIFY_BROWSER_TEST", env) ?? fileConfig.verify_browser_test ?? browserTestCommands.length > 0,
@@ -261,13 +358,45 @@ export async function loadConfig(projectDir, cli = {}, { env = process.env, now,
     browserEvidencePolicy,
     inlineQualityCheck: envBool("INLINE_QUALITY_CHECK", env) ?? fileConfig.inline_quality_check ?? true,
     inlineAutoCommit: envBool("INLINE_AUTO_COMMIT", env) ?? fileConfig.inline_auto_commit ?? false,
+    plannerPermissionMode: normalizePlannerPermissionMode(envTrimmedString("PLANNER_PERMISSION_MODE", env) ?? fileTrimmedString(fileConfig.planner_permission_mode)),
+    skillsEnabled: envBool("SKILLS_ENABLED", env) ?? fileConfig.skills_enabled ?? true,
+    blockedSkills: normalizeStringList(fileConfig.blocked_skills, "blocked_skills"),
+    claudeFullAccess: envBool("CLAUDE_FULL_ACCESS", env) ?? fileConfig.claude_full_access ?? true,
+    claudeAllowedTools: envTrimmedString("CLAUDE_ALLOWED_TOOLS", env) ?? fileTrimmedString(fileConfig.claude_allowed_tools) ?? DEFAULT_CLAUDE_ALLOWED_TOOLS,
+    reviewerAllowedTools: envTrimmedString("REVIEWER_ALLOWED_TOOLS", env) ?? fileTrimmedString(fileConfig.reviewer_allowed_tools) ?? DEFAULT_REVIEWER_ALLOWED_TOOLS,
+    claudeSessionPersistence: sessionPersistenceEnabled({
+      newContext,
+      envName: "CLAUDE_SESSION_PERSISTENCE",
+      env,
+      fileValue: fileConfig.claude_session_persistence,
+      defaultValue: true,
+    }),
+    claudeMaxOutputTokens: envUnsignedInteger("CLAUDE_MAX_OUTPUT_TOKENS", env) ?? fileUnsignedInteger(fileConfig.claude_max_output_tokens, "claude_max_output_tokens"),
+    claudeMaxThinkingTokens: envUnsignedInteger("CLAUDE_MAX_THINKING_TOKENS", env) ?? fileUnsignedInteger(fileConfig.claude_max_thinking_tokens, "claude_max_thinking_tokens"),
+    codexFullAccess: envBool("CODEX_FULL_ACCESS", env) ?? fileConfig.codex_full_access ?? true,
+    codexSessionPersistence: sessionPersistenceEnabled({
+      newContext,
+      envName: "CODEX_SESSION_PERSISTENCE",
+      env,
+      fileValue: fileConfig.codex_session_persistence,
+      defaultValue: true,
+    }),
+    cursorFullAccess: envBool("CURSOR_FULL_ACCESS", env) ?? fileConfig.cursor_full_access ?? false,
+    cursorSessionPersistence: sessionPersistenceEnabled({
+      newContext,
+      envName: "CURSOR_SESSION_PERSISTENCE",
+      env,
+      fileValue: fileConfig.cursor_session_persistence,
+      defaultValue: false,
+    }),
     discussMultiAgent: envBool("DISCUSS_MULTI_AGENT", env) ?? fileConfig.discuss_multi_agent ?? true,
     freshContextReview: cliGlobals.simple ? false : (envBool("FRESH_CONTEXT_REVIEW", env) ?? fileConfig.fresh_context_review ?? true),
     severityClassificationEnabled: cliGlobals.simple ? false : (fileConfig.severity_classification_enabled ?? true),
     planRequiresApproval: cliGlobals.requirePlanApproval || (!cliGlobals.noPlanApproval && Boolean(fileConfig.plan_requires_approval)),
-    decisionsEnabled: fileConfig.decisions_enabled !== false,
+    decisionsEnabled: envBool("DECISIONS_ENABLED", env) ?? fileConfig.decisions_enabled ?? false,
     actionProviders,
     models,
+    envActionOverrides: loadEnvActionOverrides(env),
     warnings,
     actionOverrides: cliGlobals.actionOverrides ?? [],
     eventsEnabled: true,

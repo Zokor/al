@@ -62,20 +62,39 @@ test("explicit help and version support JSON parse exits", () => {
   });
 });
 
-test("unsupported commands are exact and typo aliases remain unknown", () => {
-  const unsupported = parseCliFrom(["spec-plan"]);
-  assert.equal(unsupported.kind, "parsed");
-  assert.equal(dispatchFromCli(unsupported.cli).kind, "Unsupported");
+test("pipeline aliases dispatch exactly and typo aliases remain unknown", () => {
+  const alias = parseCliFrom(["spec-plan"]);
+  assert.equal(alias.kind, "parsed");
+  assert.equal(dispatchFromCli(alias.cli).kind, "Pipeline");
   assert.equal(parseCliFrom(["spec-random"]).kind, "error");
 });
 
-test("unsupported commands preserve Rust-style command args for dispatch", () => {
-  const unsupported = parseCliFrom(["pipeline", "--phases", "plan,implement", "--resume"]);
-  assert.equal(unsupported.kind, "parsed");
-  assert.equal(dispatchFromCli(unsupported.cli).kind, "Unsupported");
-  assert.deepEqual(unsupported.cli.commandArgs.raw, ["--phases", "plan,implement", "--resume"]);
-  assert.equal(unsupported.cli.commandArgs.phases, "plan,implement");
-  assert.equal(unsupported.cli.commandArgs.resume, true);
+test("dedicated implementation workflows dispatch through pipeline without alias parsing", () => {
+  const planImplement = parseCliFrom(["plan-implement", "ship it", "--discover", "--single-agent"]);
+  assert.equal(planImplement.kind, "parsed");
+  assert.equal(dispatchFromCli(planImplement.cli).kind, DispatchKind.Pipeline);
+  assert.equal(planImplement.cli.commandArgs.phases, "plan,implement");
+  assert.equal(planImplement.cli.commandArgs.task, "ship it");
+  assert.equal(planImplement.cli.commandArgs.discover, true);
+  assert.equal(planImplement.cli.commandArgs.singleAgent, true);
+
+  const tasksImplement = parseCliFrom(["tasks-implement", "--file", "plan.md"]);
+  assert.equal(tasksImplement.kind, "parsed");
+  assert.equal(dispatchFromCli(tasksImplement.cli).kind, DispatchKind.Pipeline);
+  assert.equal(tasksImplement.cli.commandArgs.phases, "tasks,implement");
+  assert.equal(tasksImplement.cli.commandArgs.file, "plan.md");
+
+  const missingTask = parseCliFrom(["plan-tasks-implement"]);
+  assert.equal(missingTask.kind, "error");
+  assert.match(missingTask.stderr, /Task is required/);
+});
+
+test("pipeline aliases preserve Rust-style command args for dispatch", () => {
+  const alias = parseCliFrom(["spec-plan", "--resume"]);
+  assert.equal(alias.kind, "parsed");
+  assert.equal(dispatchFromCli(alias.cli).kind, "Pipeline");
+  assert.equal(alias.cli.commandArgs.phases, "spec,plan");
+  assert.equal(alias.cli.commandArgs.resume, true);
 });
 
 test("implement command parses shared mode flags before runtime support is complete", () => {
@@ -249,7 +268,7 @@ test("queue command parses lifecycle forms", () => {
   assert.match(optionBeforeSubcommand.stderr, /unexpected argument '--file' for queue/);
 });
 
-test("unsupported pipeline aliases expose Rust phase metadata and implement flags", () => {
+test("pipeline aliases expose Rust phase metadata and implement flags", () => {
   const alias = parseCliFrom([
     "plan-implement-verify",
     "--task",
@@ -260,12 +279,16 @@ test("unsupported pipeline aliases expose Rust phase metadata and implement flag
     "3",
   ]);
   assert.equal(alias.kind, "parsed");
-  assert.equal(dispatchFromCli(alias.cli).kind, "Unsupported");
+  assert.equal(dispatchFromCli(alias.cli).kind, "Pipeline");
   assert.equal(alias.cli.commandArgs.phases, "plan,implement,verify");
   assert.equal(alias.cli.commandArgs.task, "ship it");
   assert.equal(alias.cli.commandArgs.singleAgent, true);
   assert.equal(alias.cli.commandArgs.flags.wave, true);
   assert.equal(alias.cli.commandArgs.flags.maxParallel, 3);
+
+  const naturalTask = parseCliFrom(["plan-implement-verify", "ship it"]);
+  assert.equal(naturalTask.kind, "parsed");
+  assert.equal(naturalTask.cli.commandArgs.task, "ship it");
 
   const prepAlias = parseCliFrom(["spec-plan", "tighten requirements", "--discover"]);
   assert.equal(prepAlias.kind, "parsed");
@@ -278,7 +301,7 @@ test("unsupported pipeline aliases expose Rust phase metadata and implement flag
   assert.match(invalid.stderr, /unexpected argument '--single-agent' for spec-plan/);
 });
 
-test("unsupported pipeline commands validate required phases and implement flag conflicts", () => {
+test("pipeline command parses Rust-shaped phases and implement flags", () => {
   const pipeline = parseCliFrom([
     "pipeline",
     "--phases",
@@ -289,9 +312,15 @@ test("unsupported pipeline commands validate required phases and implement flag 
     "--max-parallel=2",
   ]);
   assert.equal(pipeline.kind, "parsed");
+  assert.equal(dispatchFromCli(pipeline.cli).kind, DispatchKind.Pipeline);
   assert.equal(pipeline.cli.commandArgs.phases, "plan,implement");
   assert.equal(pipeline.cli.commandArgs.flags.wave, true);
   assert.equal(pipeline.cli.commandArgs.flags.maxParallel, 2);
+
+  const taskFileCombo = parseCliFrom(["pipeline", "--phases", "tasks", "--task", "custom task", "--file", "plan.md"]);
+  assert.equal(taskFileCombo.kind, "parsed");
+  assert.equal(taskFileCombo.cli.commandArgs.task, "custom task");
+  assert.equal(taskFileCombo.cli.commandArgs.file, "plan.md");
 
   const missing = parseCliFrom(["pipeline", "--task", "ship it"]);
   assert.equal(missing.kind, "error");

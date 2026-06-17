@@ -1,3 +1,4 @@
+import { PIPELINE_ALIAS_COMMANDS } from "./pipelineAliases.js";
 import { UNSUPPORTED_COMMANDS } from "../unsupported/commands.js";
 
 export const COMPLETION_SHELLS = Object.freeze(["bash", "elvish", "fish", "powershell", "zsh"]);
@@ -50,6 +51,7 @@ const SUPPORTED_COMMANDS = [
   ["resume", "Select or resume pending workflow state"],
   ["verify", "Validate verification state"],
   ["inline", "Run direct implementer execution"],
+  ["pipeline", "Resume pipeline state; fresh orchestration is partial"],
   ["version", "Print version"],
   ["init", "Generate default .agent-loop.json"],
   ["list-agents", "List available agents as JSON"],
@@ -60,9 +62,14 @@ const UNSUPPORTED_COMMAND_DESCRIPTIONS = new Map(
   UNSUPPORTED_COMMANDS.map((command) => [command, "Recognized Rust CLI command; runtime not yet ported in node-cli"]),
 );
 
+const PIPELINE_ALIAS_DESCRIPTIONS = new Map(
+  [...PIPELINE_ALIAS_COMMANDS].map((command) => [command, "Legacy pipeline alias; use pipeline --phases for the canonical form"]),
+);
+
 export const COMMANDS = Object.freeze(
   [
     ...SUPPORTED_COMMANDS.map(([name, description]) => ({ name, description })),
+    ...[...PIPELINE_ALIAS_COMMANDS].map((name) => ({ name, description: PIPELINE_ALIAS_DESCRIPTIONS.get(name) })),
     ...UNSUPPORTED_COMMANDS.map((name) => ({ name, description: UNSUPPORTED_COMMAND_DESCRIPTIONS.get(name) })),
   ].sort((left, right) => left.name.localeCompare(right.name)),
 );

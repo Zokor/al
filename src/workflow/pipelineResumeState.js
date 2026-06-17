@@ -1,4 +1,4 @@
-import { readJsonStateFile, readStateFile } from "../state/files.js";
+import { readJsonStateFile, readStateFile, writeStateFile } from "../state/files.js";
 
 const PIPELINE_RESUME_SCHEMA_VERSION = 1;
 const TERMINAL_PIPELINE_STATUSES = new Set(["COMPLETED", "VERIFIED"]);
@@ -56,6 +56,31 @@ export function pipelineResumeCommand(state) {
   }
   appendImplementFlagParts(parts, state.flags);
   return parts.join(" ");
+}
+
+export async function writePipelineResumeState(config, commandArgs) {
+  const state = {
+    schema_version: PIPELINE_RESUME_SCHEMA_VERSION,
+    phases: commandArgs.phases,
+    discover: Boolean(commandArgs.discover),
+    single_agent: Boolean(commandArgs.singleAgent),
+    simple_mode: Boolean(config.simpleMode),
+    flags: flagsForState(commandArgs.flags),
+  };
+  await writeStateFile(config, "pipeline.json", JSON.stringify(state, null, 2));
+  return state;
+}
+
+function flagsForState(flags = {}) {
+  return {
+    per_task: Boolean(flags.perTask),
+    wave: Boolean(flags.wave),
+    max_retries: flags.maxRetries ?? DEFAULT_FLAGS.max_retries,
+    round_step: flags.roundStep ?? DEFAULT_FLAGS.round_step,
+    continue_on_fail: Boolean(flags.continueOnFail),
+    fail_fast: Boolean(flags.failFast),
+    max_parallel: flags.maxParallel ?? null,
+  };
 }
 
 function appendImplementFlagParts(parts, flags) {

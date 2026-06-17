@@ -42,7 +42,6 @@ export function defaultJsonConfig() {
     supervisor_agent: "codex",
     single_agent: false,
     plan_requires_approval: false,
-    decisions_enabled: true,
     next_skip_discuss: false,
   };
 }

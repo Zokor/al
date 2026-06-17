@@ -1,6 +1,8 @@
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { loadConfig } from "../../config/index.js";
 import { readStateFile } from "../../state/files.js";
-import { clearGoal, GoalStatus, readGoal, setGoalStatus } from "../../state/goal.js";
+import { clearGoal, createGoal, GoalStatus, readGoal, setGoalStatus } from "../../state/goal.js";
 import { handleUnsupportedCommand } from "../../unsupported/handler.js";
 
 const DEFAULT_IMPLEMENT_FLAGS = Object.freeze({
@@ -14,14 +16,10 @@ const DEFAULT_IMPLEMENT_FLAGS = Object.freeze({
 });
 
 export async function runGoal(cli, context) {
-  if (!cli.commandArgs.goalCommand) {
-    return handleUnsupportedCommand("goal", context);
-  }
-  if (cli.commandArgs.goalCommand === "resume" && cli.commandArgs.run) {
-    return handleUnsupportedCommand("goal resume --run", context);
-  }
-
   const config = await loadConfig(context.cwd, cli, context);
+  if (!cli.commandArgs.goalCommand) {
+    return createGoalAndReportUnsupportedRun(config, cli.commandArgs, context);
+  }
   validateGoalLifecycleArgs(cli.commandArgs);
 
   switch (cli.commandArgs.goalCommand) {
@@ -30,12 +28,21 @@ export async function runGoal(cli, context) {
     case "pause":
       return pauseGoal(config, context);
     case "resume":
-      return resumeGoal(config, context);
+      return resumeGoal(config, context, { run: cli.commandArgs.run });
     case "clear":
       return clearActiveGoal(config, context);
     default:
       throw new Error(`unsupported goal command: ${cli.commandArgs.goalCommand}`);
   }
+}
+
+async function createGoalAndReportUnsupportedRun(config, args, context) {
+  const { objective, sourceFile } = await resolveGoalObjective(args, context.cwd);
+  const goal = await createGoal(config, objective, sourceFile, args.replace);
+  if (!config.jsonMode) {
+    context.stdout.write(`Goal active: "${goal.objective}"\n`);
+  }
+  return handleUnsupportedCommand("goal", context);
 }
 
 async function printGoalStatus(config, context) {
@@ -71,7 +78,7 @@ async function pauseGoal(config, context) {
   return 0;
 }
 
-async function resumeGoal(config, context) {
+async function resumeGoal(config, context, { run = false } = {}) {
   const goal = await setGoalStatus(config, GoalStatus.Active);
   if (!goal) {
     if (!config.jsonMode) {
@@ -81,6 +88,9 @@ async function resumeGoal(config, context) {
   }
   if (!config.jsonMode) {
     context.stdout.write(`Goal active: "${goal.objective}"\n`);
+  }
+  if (run) {
+    return handleUnsupportedCommand("goal resume --run", context);
   }
   return 0;
 }
@@ -114,6 +124,33 @@ function isDefaultImplementFlags(flags) {
     return true;
   }
   return Object.entries(DEFAULT_IMPLEMENT_FLAGS).every(([key, value]) => flags[key] === value);
+}
+
+async function resolveGoalObjective(args, cwd) {
+  const hasWords = args.objectiveWords.length > 0;
+  const hasObjective = args.objectiveText !== undefined && args.objectiveText.trim() !== "";
+  const hasFile = args.file !== undefined;
+  const sourceCount = Number(hasWords) + Number(hasObjective) + Number(hasFile);
+  if (sourceCount !== 1) {
+    throw new Error("Provide exactly one goal objective via text, --objective, or --file.");
+  }
+
+  if (args.file !== undefined) {
+    try {
+      return {
+        objective: await readFile(resolve(cwd, args.file), "utf8"),
+        sourceFile: args.file,
+      };
+    } catch (error) {
+      throw new Error(`Failed to read goal file ${args.file}: ${error.message}`);
+    }
+  }
+
+  if (hasObjective) {
+    return { objective: args.objectiveText, sourceFile: undefined };
+  }
+
+  return { objective: args.objectiveWords.join(" "), sourceFile: undefined };
 }
 
 async function readWorkflowStatus(config) {

@@ -8,15 +8,10 @@ import { safeStatePath, writeStateFile } from "../../state/files.js";
 import { writeStatus } from "../../state/status.js";
 import { assertNoActiveWaveLock } from "../../state/waveLock.js";
 import { runCheckCommands } from "../checkCommands.js";
+import { gitCheckpoint } from "../gitCheckpoint.js";
 
 export async function runInline(cli, context) {
   const config = await loadConfig(context.cwd, cli, context);
-  if (config.inlineAutoCommit) {
-    context.stderr.write("Unsupported in node-cli first pass: inline_auto_commit=true\n");
-    context.stderr.write("See node-cli/docs/unsupported.md for supported first-pass behavior.\n");
-    return 2;
-  }
-
   await assertNoActiveWaveLock(config);
   const task = await readInlineTask(context.cwd, cli.commandArgs);
   await appendEvent(config, { type: "command_started", data: { command: "inline" } });
@@ -42,6 +37,9 @@ export async function runInline(cli, context) {
   }
 
   await runInlineQualityChecks(config);
+  if (config.inlineAutoCommit) {
+    await gitCheckpoint("inline: auto-commit", config);
+  }
   await writeStatus({ status: "COMPLETED", round: 1, reason: "Inline execution completed", workflow: "implement" }, config);
   return 0;
 }

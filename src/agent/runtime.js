@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { writeFile } from "node:fs/promises";
 import { resolveAgentForAction } from "./resolution.js";
 import { providerPlugin } from "./providers.js";
+import { systemPromptForRole } from "./systemPrompt.js";
 
 export class AgentRunError extends Error {
   constructor(message, { command, status, output } = {}) {
@@ -17,11 +18,12 @@ export function resolveAgentCommand({ config, action, slot, role, prompt, system
   const agent = resolveAgentForAction(config, { action, slot, role });
   const plugin = providerPlugin(agent.provider);
   const args = plugin.buildCommand({ prompt, model: agent.model });
-  if (sessionId && plugin.injectSessionResume && !codexReadOnlyRoleRequiresFreshSession(agent.provider, role)) {
+  const resolvedSystemPrompt = systemPrompt ?? systemPromptForRole(config, role);
+  if (sessionId && plugin.injectSessionResume && sessionPersistenceEnabled(config, agent.provider) && !codexReadOnlyRoleRequiresFreshSession(agent.provider, role)) {
     plugin.injectSessionResume(args, sessionId);
   }
-  if (systemPrompt) {
-    (plugin.injectSystemPrompt ?? defaultInjectSystemPrompt)(args, systemPrompt);
+  if (resolvedSystemPrompt) {
+    (plugin.injectSystemPrompt ?? defaultInjectSystemPrompt)(args, resolvedSystemPrompt);
   }
   plugin.injectPermissionFlags?.(args, { config, role, action, agent });
   plugin.injectEffortFlags?.(args, { config, role, action, agent, effort: agent.effort });
@@ -66,6 +68,19 @@ function defaultInjectSystemPrompt(args, systemPrompt) {
   if (args.length > 0) {
     args[args.length - 1] = `${systemPrompt}\n\n${args[args.length - 1]}`;
   }
+}
+
+function sessionPersistenceEnabled(config, provider) {
+  if (provider === "claude") {
+    return config.claudeSessionPersistence !== false;
+  }
+  if (provider === "codex") {
+    return config.codexSessionPersistence !== false;
+  }
+  if (provider === "cursor") {
+    return Boolean(config.cursorSessionPersistence);
+  }
+  return !config.newContext;
 }
 
 function codexReadOnlyRoleRequiresFreshSession(provider, role) {

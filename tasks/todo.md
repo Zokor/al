@@ -3,6 +3,19 @@
 Convert `node-cli` into a 1:1 functional port of the Rust `agent-loop` CLI while
 keeping the JavaScript implementation simple, incremental, and evidence-backed.
 
+## Active Slice: dedicated implementation workflow commands
+
+- [ ] Define supported first-pass behavior for `plan-implement`,
+      `tasks-implement`, and `plan-tasks-implement`.
+- [ ] Parse and dispatch the dedicated workflow commands as supported pipeline
+      compositions without Rust's legacy-alias note.
+- [ ] Route runnable default batch-compatible paths through existing plan/tasks
+      shell and implement runtime primitives.
+- [ ] Update docs/parity notes so unsupported commands only list true current
+      boundaries.
+- [ ] Verify with focused parser/command tests, lint, full tests, smoke parity,
+      and `git diff --check`.
+
 ## Assumptions
 
 - `../cli` is the source of truth for command behavior, options, state files,
@@ -17,6 +30,28 @@ keeping the JavaScript implementation simple, incremental, and evidence-backed.
 - [x] Inventory Rust commands, global options, and Node unsupported commands from
   source evidence.
 - [x] Create `docs/parity-matrix.md` as the living parity matrix.
+- [x] Port prompt style/profile overlays for currently executed Node prompts.
+  - [x] Record assumptions and scope for prompt style/profile parity.
+  - [x] Load Rust-shaped `prompt_style` / `AGENT_LOOP_PROMPT_STYLE` with validation.
+  - [x] Resolve `prompt_profile` / `PROMPT_PROFILE` for built-in `xml_boundaries_v1`
+        and profile TOML paths.
+  - [x] Apply phase overlays to currently executed Node discovery and discuss prompts.
+  - [x] Add focused config and command tests for style/profile loading and prompt overlay application.
+  - [x] Update parity docs and run Node verification.
+- [x] Port Rust-shaped provider system prompts for current agent invocations.
+  - [x] Record assumptions and scope for system prompt parity.
+  - [x] Correct `decisions_enabled` default and env precedence to match Rust.
+  - [x] Generate role system prompts for decision capture, single-agent reviewer preamble, and prompt-profile system overlays.
+  - [x] Inject generated system prompts through the existing provider runtime seam.
+  - [x] Add focused config/runtime tests and update parity docs.
+  - [x] Run Node verification.
+  - [x] Append Rust-shaped progressive-context state manifests to provider
+        system prompts.
+  - [x] Load `progressive_context` / `PROGRESSIVE_CONTEXT` with Rust-shaped
+        precedence.
+  - [x] Add provider-specific injection coverage so manifest prompts land in
+        the prompt argument for `-p` providers.
+  - [x] Update parity docs and run Node verification for the manifest slice.
 - [x] Add a parity harness that can compare Rust and Node stdout, stderr, exit
   code, and `.agent-loop/` state for isolated fixtures.
   - [x] deterministic smoke runner for non-agent scenarios
@@ -33,6 +68,10 @@ keeping the JavaScript implementation simple, incremental, and evidence-backed.
   `review`, `discuss`, and runtime pipelines.
   - [x] shared implement-mode flag parser and pipeline alias metadata
   - [x] agent/provider runtime primitive with fake-provider tests
+  - [x] `AGENT_LOOP_<ACTION>_MODEL` / `AGENT_LOOP_<ACTION>_EFFORT`
+        env override precedence for provider resolution
+  - [x] Rust-shaped Claude/Codex/Cursor CLI tuning config, permission flags,
+        and session-persistence gates
   - [ ] wire phase/runtime commands through the shared provider primitive
     - [x] `discuss` facilitator/progress/resume loop with fake-provider tests
 - [ ] Port `implement`, `review`, `discuss`, and `verify` runtime behavior with
@@ -45,14 +84,22 @@ keeping the JavaScript implementation simple, incremental, and evidence-backed.
   - [x] `implement --resume` for persisted/default batch mode without clearing
         existing state; keep per-task/wave resume and retry loops as explicit gaps
   - [x] `implement` bounded batch retry loop when `review_max_rounds` /
-        `REVIEW_MAX_ROUNDS` is positive; keep unlimited retry, per-task/wave,
-        stuck/debugger, browser-blocking implementation evidence, and advanced
-        Gate B/Gate C branches as explicit gaps
+        `REVIEW_MAX_ROUNDS` is positive; keep per-task/wave and
+        stuck/debugger as explicit gaps
+  - [x] `implement` unbounded batch retry loop when `review_max_rounds` is `0`;
+        keep stuck/debugger, role-swap, per-task/wave, and git checkpoint
+        behavior as explicit gaps
+  - [x] `implement` high-watermark logging for unbounded retry rounds; keep
+        stuck/debugger, role-swap, per-task/wave, and git checkpoints as
+        explicit gaps
   - [x] `implement-verify` from existing `tasks.md` or `plan.md` state by
         composing the supported batch implement path and first-pass verify path;
         keep resume and fix-loop recovery as explicit gaps
   - [x] `implement-verify` empty-state Rust-vs-Node parity smoke scenario for
         normalized stdout/stderr and exit code
+  - [x] `implement-verify --resume` for persisted `implement` and `verify`
+        workflows by composing supported resumes; keep `plan` and standalone
+        `review` workflow chaining explicit until those runtimes are ported
   - [x] `review` standalone primary reviewer path with file/base diff setup,
         protocol-failure detection, approved outcome, and explicit partial gaps
   - [x] `review` dual-agent adversarial validation after primary findings;
@@ -65,8 +112,8 @@ keeping the JavaScript implementation simple, incremental, and evidence-backed.
   - [x] `implement` Gate B verification after fresh-context findings
   - [x] `implement` Gate C dispute bounce after implementer signoff disputes
   - [x] `implement` auto-test quality check evidence before implementation
-        review; keep browser-blocking implementation evidence as a later slice
-  - [ ] `implement` browser/E2E check evidence, blocking failure synthesis,
+        review
+  - [x] `implement` browser/E2E check evidence, blocking failure synthesis,
         and missing-evidence gate before implementation review
   - [x] `verify` fresh automated verifier round with consensus entry guard,
         tagged artifact parsing, VERIFIED/VERIFICATION_FAILED statuses, and
@@ -97,15 +144,62 @@ keeping the JavaScript implementation simple, incremental, and evidence-backed.
         write Rust-compatible approval response files; broader plan approval
         gate orchestration remains a pipeline/plan runtime gap
   - [x] `goal status` / `goal pause` / `goal resume` / `goal clear`
-        lifecycle-only commands against Rust-compatible `goal.json`; keep goal
-        creation and `goal resume --run` as explicit runtime gaps
+        lifecycle commands against Rust-compatible `goal.json`; keep goal
+        supervisor/resume orchestration as explicit runtime gap
+  - [x] `goal` creation state path for text / `--objective` / `--file` with
+        Rust-compatible `goal.json`; keep supervisor run as explicit runtime gap
+  - [x] `goal resume --run` state preparation: mark goal active and clear
+        reason before unsupported resume orchestration boundary
+  - [x] `resume` action-required routing for paused/budget-limited goals and
+        deferred/blocked queue items using Rust `queue_id` output
+  - [x] `resume` active queue item hydration: create active `goal.json` from
+        active/split/implementing/verifying queue attention before runtime routing
+  - [x] `resume` non-dry-run preamble messages before supervisor, pipeline,
+        interrupted workflow, and `next` fallback handoff
+  - [x] `resume` interrupted workflow handoff through existing Node resume
+        command shells after Rust pre-runtime validation
+  - [x] `pipeline --resume` state persistence and active workflow handoff through
+        existing Node resume command shells
+  - [x] `pipeline --phases spec|plan` fresh single-phase state setup and
+        `pipeline.json` persistence through existing phase shells
+  - [x] `pipeline --phases tasks` fresh single-phase state setup with
+        Rust-compatible plan/task selection
+  - [x] `pipeline --phases implement` fresh single-phase batch implementation
+        handoff with `pipeline.json` persistence
+  - [x] `pipeline --phases discuss` fresh single-phase discussion handoff with
+        `pipeline.json` persistence
+  - [x] `pipeline --phases verify` fresh single-phase verification handoff with
+        `pipeline.json` persistence and supported verifier execution
+  - [x] `pipeline --phases implement,verify` fresh multi-phase handoff using the
+        supported batch implementation and verifier paths
+  - [x] Runtime-only fresh pipeline subsets across `discuss`, `implement`, and
+        `verify`, preserving state between supported phases
+  - [x] Pipeline aliases dispatch through the canonical pipeline runner with
+        Rust's legacy-alias note; unsupported docs now list only true command
+        boundaries
+  - [x] `pipeline --phases plan,implement` and
+        `pipeline --phases plan,implement,verify` narrow first-pass planning
+        runtime: planner writes `plan.md`, reviewer approves it, then supported
+        batch implementation and verification continue
+  - [x] `pipeline --phases tasks,implement` and
+        `pipeline --phases tasks,implement,verify` plan-backed handoff through
+        the existing tasks shell, batch implementation, and verifier paths
   - [x] `queue add` / `queue list` / `queue status` / `queue pause` /
         `queue resume` / `queue cancel` state-only lifecycle commands against
-        Rust-compatible `goal-queue.json`; keep `queue resume --run` and
-        supervisor queue execution as explicit runtime gaps
+        Rust-compatible `goal-queue.json`; keep supervisor queue execution as
+        explicit runtime gap
+  - [x] `queue resume <id> --run` state preparation: queued resume, activation,
+        and active `goal.json`; keep supervisor queue execution as explicit gap
+  - [x] `supervise --queue` state preparation: activate next eligible queued
+        item and create active `goal.json`; keep supervisor execution as
+        explicit gap
+  - [x] `supervise --queue` resumable-state detection: print Running vs
+        Resuming like Rust before the supervisor boundary
   - [x] `inline --task/--file` direct implementer execution with Rust-compatible
         task/workflow/status state, non-blocking quality check logging, and
-        explicit auto-commit boundary
+        checkpoint support behind `inline_auto_commit` plus `auto_commit`
+  - [x] `inline_auto_commit` git checkpoint parity for successful inline runs,
+        gated by `auto_commit` and excluding `.agent-loop/state/**`
   - [x] `chain` Rust-shaped parser surface for plan files, `--command`, and
         `--resume`
 - [ ] Port remaining read-only/low-runtime commands.
@@ -196,9 +290,14 @@ keeping the JavaScript implementation simple, incremental, and evidence-backed.
   verification when needed, implementer signoff, and Gate C disputed
   late-finding bounce. Auto-test quality commands now run before implementation
   review, write `quality_checks.md`, and feed Gate A/Gate B prompts as reviewer
-  evidence. Unlimited retry, per-task/wave, browser-blocking implementation
-  evidence, compound phases, and git checkpoints remain documented gaps until
-  ported.
+  evidence. Browser/E2E checks now also run before implementation review,
+  append to `quality_checks.md`, synthesize blocking review findings when
+  policy blocks, warn when policy is non-blocking, and apply the missing
+  browser-evidence gate for browser-facing work. Unbounded `NEEDS_CHANGES`
+  batch retries now continue when `review_max_rounds` is `0`, and unlimited
+  mode logs the Rust high-watermark safeguard at round 50 and every 25 rounds
+  after. Per-task/wave, stuck/debugger behavior, compound phases, and git
+  checkpoints remain documented gaps until ported.
 - `implement` without fresh task/file input now supports Rust's batch-mode
   existing-state path from `tasks.md` or `plan.md`, including final `next`
   handoff into implementation. It builds Rust-shaped combined task prompts and
@@ -208,9 +307,10 @@ keeping the JavaScript implementation simple, incremental, and evidence-backed.
   keeps per-task/wave resume plus retry loops as explicit boundaries.
 - `implement` now supports bounded batch retry after same-context reviewer
   `NEEDS_CHANGES` when `review_max_rounds` / `REVIEW_MAX_ROUNDS` is positive,
-  including retry prompts and `MAX_ROUNDS` terminal status. Unlimited retry,
-  per-task/wave, stuck/debugger, and browser-blocking implementation evidence
-  remain explicit boundaries.
+  including retry prompts and `MAX_ROUNDS` terminal status. Unbounded batch
+  retry now continues when the cap is `0` and logs high-watermark safeguards
+  at Rust's unlimited-round thresholds; per-task/wave, stuck/debugger,
+  role-swap, and git checkpoint behavior remain explicit boundaries.
 - `review` now initializes standalone review state, writes `changes.md` from
   `--files`, `--base`, or working-tree diffs, runs the primary reviewer through
   `Action::Review`, detects reviewer protocol failures, approves empty
@@ -252,8 +352,11 @@ keeping the JavaScript implementation simple, incremental, and evidence-backed.
   `AWAITING_INPUT`, while `warn` records the gate and continues.
 - `implement-verify --task/--file` now routes through a dedicated supported
   command that composes the first-pass implement round and first-pass verify
-  round. `implement-verify --resume`, per-task/wave execution, and
-  retry/fix-loop recovery remain documented gaps.
+  round. `implement-verify --resume` now composes the supported
+  `implement --resume` and `verify` paths when state is in `implement`, and
+  delegates to `verify --resume` when state is already in `verify`. Plan-stage
+  resume chaining, standalone review workflow resume, per-task/wave execution,
+  and retry/fix-loop recovery remain documented gaps.
 - `approve plan` and `reject plan --reason <reason>` now parse as supported
   control commands, validate the Rust-supported plan phase, require a pending
   `plan-pending-approval.flag`, write per-decision and legacy approval response
@@ -276,35 +379,179 @@ keeping the JavaScript implementation simple, incremental, and evidence-backed.
   partial.
 - `resume` now matches Rust for deterministic dry-run and no-state paths,
   JSON `command_started` on non-dry-run error paths, interrupted-state integrity
-  errors before `next` fallback, and active pipeline selection when
-  `pipeline.json`/`workflow.txt` exist without `status.json`. Full goal/queue,
-  pipeline, supervise, and phase execution paths remain partial.
+  errors before `next` fallback, active pipeline selection when
+  `pipeline.json`/`workflow.txt` exist without `status.json`, and
+  action-required output for paused/budget-limited goals plus deferred/blocked
+  queue items. Active queue items now hydrate active `goal.json` before runtime
+  routing, and non-dry-run supervisor, pipeline, interrupted workflow, and
+  `next` fallback routes print Rust's pre-runtime messages before handoff.
+  Interrupted workflow routes now delegate to the existing Node resume command
+  shells instead of a generic unsupported handler. Full pipeline, supervise, and
+  phase execution paths remain partial.
+- `pipeline --resume` now validates Rust phase rules, writes Rust-shaped
+  `pipeline.json`, verifies the active workflow belongs to the requested phases,
+  and delegates to the existing Node resume command shells. Fresh pipeline
+  execution now supports single-phase `discuss`, `spec`, `plan`, `tasks`,
+  `implement`, and `verify` through existing Node phase/runtime paths, then
+  writes Rust-shaped `pipeline.json`; `tasks` follows Rust plan/task selection
+  for existing state, explicit plan files, and task overrides, `discuss` uses
+  the supported facilitator loop, `implement` writes pipeline metadata before
+  runtime failure can occur, and `verify` initializes fresh verify state from
+  pipeline task input before entering the supported verifier round. Fresh
+  multi-phase pipelines composed only of `discuss`, `implement`, and `verify`
+  now run in order, preserve accumulated state, transition workflow/status
+  before continuation phases, and stop before later phases if an earlier phase
+  fails. Fresh `plan,implement` and `plan,implement,verify` pipelines now run
+  a narrow first-pass planning runtime before supported implementation and
+  verification. Fresh `tasks,implement` and `tasks,implement,verify` pipelines
+  run when a plan file or existing `plan.md` supplies tasks-phase input.
+  Pipeline aliases now dispatch through the canonical pipeline runner and emit
+  Rust's legacy-alias note. Broader fresh orchestration that depends on full
+  spec or task-decomposition runtimes remains an explicit unsupported boundary
+  until full orchestration is ported.
 - `goal status`, `goal pause`, `goal resume`, and `goal clear` now parse and
   execute as lifecycle-only state commands against Rust-compatible
   `goal.json`. Mutating commands create `goal.lock` and preserve Rust output,
   status values, reason handling, and exit codes for the supported subset.
-  Goal creation and `goal resume --run` still depend on pipeline/supervisor
-  orchestration and remain unsupported.
+  Goal creation from text, `--objective`, or `--file` now writes Rust-compatible
+  active `goal.json` state and then stops at the explicit unsupported
+  supervisor-run boundary. `goal resume --run` now marks the goal active and
+  clears the pause reason before the explicit unsupported resume-orchestration
+  boundary.
 - `queue add`, `queue list`, `queue status`, `queue pause`, `queue resume`,
-  and `queue cancel` now parse and execute as state-only lifecycle commands
+  and `queue cancel` now parse and execute as lifecycle commands
   against Rust-compatible `goal-queue.json`. Mutating commands create
   `goal-queue.lock`; title derivation, dependency normalization, terminal item
   protection, plain/JSON output, and exit codes match the supported Rust paths.
-  `queue resume --run` still depends on queue activation plus supervisor
-  execution and remains unsupported.
+  `queue resume <id> --run` now performs Rust-shaped state prep by marking the
+  item runnable, activating it, deferring any previous active run, and creating
+  active `goal.json`; supervisor execution remains unsupported.
+- `supervise --queue` now performs Rust-shaped state prep by rejecting task,
+  file, and resume combinations, activating the current active run or next
+  eligible queued item using priority/dependency rules, creating active
+  `goal.json`, and choosing `Running` vs `Resuming` from resumable state;
+  supervisor execution remains unsupported.
 - `inline --task` and `inline --file` now parse and execute as direct
   implementer invocations. Node writes Rust-compatible `original-request.md`,
   `task.md`, `workflow.txt`, and `status.json`, runs one implementer call, logs
   non-blocking quality checks when both `inline_quality_check` and `auto_test`
-  are enabled, and keeps `inline_auto_commit=true` as an explicit unsupported
-  boundary until git checkpoint parity is ported.
+  are enabled, and supports `inline_auto_commit` checkpoints after successful
+  inline execution when `auto_commit` is also enabled. Checkpoints exclude
+  `.agent-loop/state/**` and log Rust-shaped skip/failure/success messages.
 - `scripts/parity-smoke.js` now provides a repeatable Rust-vs-Node smoke
   harness for deterministic non-agent scenarios. It compares exit code,
   normalized stdout/stderr, and selected state files while normalizing elapsed
   lines, JSON key order, and timestamp fields.
+- `prompt_style` / `AGENT_LOOP_PROMPT_STYLE` and `prompt_profile` /
+  `PROMPT_PROFILE` now load with Rust-shaped precedence. The Node first pass
+  supports the built-in `xml_boundaries_v1` profile, explicit and named prompt
+  profile TOML paths, and phase overlays for the currently executed discovery
+  and discuss prompts. System prompt overlays and unported phase prompts remain
+  explicit parity gaps.
+- Provider invocations now get Rust-shaped default system prompts through the
+  shared runtime seam: decision capture when `decisions_enabled` is true,
+  single-agent reviewer preambles, and prompt-profile system overlays. The
+  `decisions_enabled` default now matches Rust (`false`) with
+  `DECISIONS_ENABLED` env override support. Progressive-context state manifests
+  now append to generated system prompts when `progressive_context` /
+  `PROGRESSIVE_CONTEXT` is enabled, matching Rust's on-demand context manifest.
+- Provider resolution now honors Rust-shaped per-action env overrides:
+  `AGENT_LOOP_<ACTION>_MODEL` and `AGENT_LOOP_<ACTION>_EFFORT` sit below CLI
+  action overrides and above JSON `models`, with invalid env effort values
+  rejected during config loading.
+- Provider command construction now honors Rust-shaped Claude/Codex/Cursor CLI
+  tuning for the currently implemented runtime seam: full-access flags,
+  Claude allowed tools, reviewer allowed tools, planner permission mode, skills
+  toggling, Claude token env, and provider session-persistence gates.
 
 ## Review
 
+- 2026-06-17: Ported the next compound/pipeline alias execution slice. Node now
+  treats Rust pipeline aliases as supported dispatches into the canonical
+  pipeline runner, emits the Rust legacy-alias note, removes those aliases from
+  the unsupported command set/docs, runs `plan,implement` and
+  `plan,implement,verify` through a narrow first-pass planning runtime, and
+  runs `tasks,implement` / `tasks,implement,verify` when a plan file or existing
+  `plan.md` supplies tasks-phase input. Spec-leading aliases and full task
+  decomposition remain explicit gaps. Verification: `npm test --
+  test/parser.test.js test/commands.test.js` (188 passing), `npm run lint` (86
+  JavaScript files), `npm test -- --test-reporter=dot` (266 passing),
+  `npm run parity:smoke` (45 scenarios), and `git diff --check`. No Rust build
+  was created; `cargo clean --manifest-path cli/Cargo.toml` was not needed.
+- 2026-06-17: Ported Rust-shaped Claude/Codex/Cursor CLI tuning for the shared
+  provider runtime seam. Node now loads provider full-access flags, Claude and
+  reviewer allowed-tool lists, planner permission mode, skills toggling,
+  Claude token settings, `NEW_CONTEXT`, and provider session-persistence gates
+  with Rust-shaped env/file/default precedence. Provider command builders now
+  emit Rust-shaped Claude permission flags, Codex/Cursor sandbox/full-access
+  flags, Claude token env, and resume-session suppression. Verification:
+  `npm test -- test/config.test.js test/agent-runtime.test.js` (42 passing),
+  `npm test -- test/agent-runtime.test.js test/config.test.js
+  test/commands.test.js` (204 passing), `npm run lint` (86 JavaScript files),
+  `npm test` (264 passing), `npm run parity:smoke` (45 scenarios), and
+  `git diff --check`. No Rust build was created; `cargo clean --manifest-path
+  cli/Cargo.toml` was not needed.
+- 2026-06-17: Ported Rust-shaped per-action env model/effort overrides for
+  provider resolution. Node now loads `AGENT_LOOP_<ACTION>_MODEL` and
+  `AGENT_LOOP_<ACTION>_EFFORT` for all Rust actions, rejects invalid env effort
+  values during config load, and resolves provider calls with Rust precedence:
+  CLI action override > env action override > JSON `models` > slot profile
+  shorthand. Focused tests cover env-over-JSON, CLI-over-env, and effort-only
+  env overrides preserving JSON model selection. Verification: `npm test --
+  test/config.test.js test/agent-runtime.test.js` (36 passing), `npm test --
+  test/agent-runtime.test.js test/config.test.js test/commands.test.js` (198
+  passing), `npm run lint` (86 JavaScript files), `npm test` (258 passing),
+  `npm run parity:smoke` (45 scenarios), and `git diff --check`. No Rust build
+  was created; `cargo clean --manifest-path cli/Cargo.toml` was not needed.
+- 2026-06-17: Ported Rust-shaped progressive-context state manifests for
+  provider invocations. Node now loads `progressive_context` /
+  `PROGRESSIVE_CONTEXT`, appends the same on-demand context manifest as Rust
+  after decision/reviewer system prompt parts, gates `.agent-loop/decisions.md`
+  on `decisions_enabled`, omits missing docs/state files, and injects manifest
+  prompts into the actual prompt argument for `-p` providers such as Qwen and
+  Copilot. Verification: `npm test -- test/config.test.js
+  test/agent-runtime.test.js` (33 passing), `npm test --
+  test/agent-runtime.test.js test/config.test.js test/commands.test.js` (195
+  passing), `npm run lint` (86 JavaScript files), `npm test` (255 passing),
+  `npm run parity:smoke` (45 scenarios), and `git diff --check`. No Rust build
+  was created; `cargo clean --manifest-path cli/Cargo.toml` was not needed.
+- 2026-06-17: Ported Rust-shaped provider system prompts for current agent
+  invocations. Node now defaults `decisions_enabled` to false, honors
+  `DECISIONS_ENABLED`, injects decision-capture prompts only when enabled,
+  adds the single-agent reviewer preamble, and applies prompt-profile system
+  overlays through the provider runtime when callers do not pass an explicit
+  system prompt. Progressive-context state manifest prompts remain open.
+  Verification: `npm test -- test/config.test.js test/agent-runtime.test.js`
+  (30 passing), `npm test -- test/agent-runtime.test.js test/config.test.js
+  test/commands.test.js` (192 passing), `npm run lint` (85 JavaScript files),
+  `npm test` (252 passing), `npm run parity:smoke` (45 scenarios), and
+  `git diff --check`. No Rust build was created; `cargo clean --manifest-path
+  cli/Cargo.toml` was not needed.
+- 2026-06-17: Ported prompt style/profile loading for currently executed
+  discovery and discuss prompts. Node now validates `prompt_style`, honors
+  `AGENT_LOOP_PROMPT_STYLE`, resolves `prompt_profile` / `PROMPT_PROFILE` for
+  built-in `xml_boundaries_v1`, explicit TOML paths, and named project profile
+  paths, and appends Rust-ordered global plus phase overlays to discovery and
+  discuss prompts. System prompt overlays and unported phase prompts remain
+  explicit gaps. Verification: `npm test -- test/config.test.js
+  test/commands.test.js` (182 passing), `npm run lint` (84 JavaScript files),
+  `npm test` (248 passing), `npm run parity:smoke` (45 scenarios), and
+  `git diff --check`. No Rust build was created; `cargo clean --manifest-path
+  cli/Cargo.toml` was not needed.
+- 2026-06-17: Matched Rust `resume` non-dry-run pre-runtime messages for
+  supervisor checkpoints, saved pipelines, interrupted workflow handoff, and
+  `next` fallback paths while keeping dry-run output unchanged. Verification:
+  `npm test -- test/commands.test.js`.
+- 2026-06-17: Routed interrupted `resume` workflows through the existing Node
+  workflow resume dispatcher after the Rust pre-runtime checks and message. The
+  supported shell boundary now preserves phase-specific validation/output instead
+  of falling through the generic unsupported handler. Verification:
+  `npm test -- test/commands.test.js`.
+- 2026-06-17: Ported the deterministic `pipeline --resume` setup path. Node now
+  validates phase names, duplicate phases, order, and tasks-without-plan state,
+  writes Rust-shaped `pipeline.json`, checks active workflow membership, and
+  delegates to existing resume shells. Verification:
+  `npm test -- test/commands.test.js`.
 - 2026-06-17: Ported `implement` Gate C dispute bounce after implementer
   signoff disputes. Rejected late findings now write consensus; confirmed late
   findings enter the bounded retry loop or max-rounds path. Verification:
@@ -335,6 +582,11 @@ keeping the JavaScript implementation simple, incremental, and evidence-backed.
   path and first-pass verify path. Empty state now reaches the Rust-shaped
   implement state error, while `implement-verify --resume` remains an explicit
   unsupported boundary. Verification: `npm test -- test/commands.test.js`.
+- 2026-06-17: Ported `implement-verify --resume` for state already in
+  `implement` or `verify` by composing the supported implementation and
+  verification resume paths. Plan-stage resume chaining and standalone review
+  workflow resume remain explicit boundaries. Verification:
+  `npm test -- test/commands.test.js`.
 - 2026-06-17: Ported Rust-style command-final completion invariants for
   successful `verify` runs. Node now rejects stale `handoff.json`/`handoff.md`,
   missing or invalid `verification.json`, missing `verification.md`, and
@@ -366,20 +618,51 @@ keeping the JavaScript implementation simple, incremental, and evidence-backed.
 - 2026-06-17: Ported lifecycle-only `goal status`, `goal pause`,
   `goal resume`, and `goal clear`. Tests cover parser creation/lifecycle forms,
   plain/JSON status output, goal state mutation, `goal.lock` creation,
-  lifecycle-only validation, unsupported creation, and unsupported
-  `resume --run`. Installed Rust-vs-Node smokes matched plain lifecycle output,
-  exit codes, and canonical JSON status for the supported subset.
+  lifecycle-only validation, and missing-goal resume handling. Installed
+  Rust-vs-Node smokes matched plain lifecycle output, exit codes, and canonical
+  JSON status for the supported subset.
+- 2026-06-17: Ported `goal` creation state. Text, `--objective`, and `--file`
+  inputs now create Rust-compatible active `goal.json` state with `goal.lock`
+  before returning the documented unsupported supervisor-run boundary; `--replace`
+  preserves Rust's existing-goal guard.
+- 2026-06-17: Ported `goal resume --run` state preparation. Node now marks the
+  goal active, clears the pause reason, and writes `goal.lock` before returning
+  the explicit unsupported resume-orchestration boundary; missing goals still
+  return Rust-compatible `No goal to resume.` with exit 1.
+- 2026-06-17: Matched Rust `resume` action-required routing for paused goals
+  and deferred queue items. Node now returns the Rust stderr guidance instead
+  of the unsupported handler for paused goals, and dry-run JSON/plain queue
+  resume output uses the persisted `queue_id`.
+- 2026-06-17: Matched Rust `resume` active queue hydration. Non-dry-run resume
+  now creates active `goal.json` from active/split/implementing/verifying queue
+  attention before falling through to the remaining runtime route.
 - 2026-06-17: Ported state-only queue lifecycle commands. Tests cover parser
   add/lifecycle forms, `goal-queue.json` writes, dependency normalization,
   list/status output, pause/resume/cancel mutations, terminal item protection,
-  JSON status/mutation output, silent JSON resume, and unsupported
-  `queue resume --run`. Installed Rust-vs-Node smokes matched normalized plain
-  queue output, exit codes, canonical queue state after add/cancel, and
-  canonical JSON status.
+  JSON status/mutation output, and silent JSON resume. Installed Rust-vs-Node
+  smokes matched normalized plain queue output, exit codes, canonical queue
+  state after add/cancel, and canonical JSON status.
+- 2026-06-17: Ported `queue resume <id> --run` state preparation. Node now
+  marks the item runnable, activates it, defers any previous active run, creates
+  active `goal.json` from the queue objective, and then returns the explicit
+  unsupported supervisor-run boundary; active-goal conflicts remain blocking
+  after activation like Rust.
+- 2026-06-17: Ported `supervise --queue` state preparation. Node now rejects
+  task/file/resume combinations, activates the current active run or next
+  eligible queued item using Rust priority/dependency rules, creates active
+  `goal.json`, and then returns the explicit unsupported supervisor-run
+  boundary; active-goal conflicts remain blocking after activation like Rust.
+- 2026-06-17: Matched Rust `supervise --queue` queue-run resume detection.
+  Node now prints `Running queue item` for fresh state and `Resuming queue item`
+  when `status.json`, `workflow.txt`, `pipeline.json`, or core task/plan/verify
+  artifacts make the state resumable before the supervisor boundary.
 - 2026-06-17: Ported the default `inline --task/--file` path. Tests cover
   parser support, direct implementer invocation, file input precedence, status
-  transitions, non-blocking quality check logging behind `auto_test`, and the
-  explicit `inline_auto_commit=true` unsupported boundary.
+  transitions, and non-blocking quality check logging behind `auto_test`.
+- 2026-06-17: Ported `inline_auto_commit` checkpoint behavior for successful
+  inline runs. Node now honors the Rust `auto_commit` gate, skips with the
+  Rust-shaped log when disabled, commits non-state loop-owned files when enabled,
+  and excludes `.agent-loop/state/**` from the commit.
 - 2026-06-17: Added `npm run parity:smoke` as the first reusable Rust-vs-Node
   parity harness. Default scenarios currently cover `analyze-coverage`,
   empty `goal status`, empty `queue status`, `inline` missing-task errors,
@@ -414,6 +697,20 @@ keeping the JavaScript implementation simple, incremental, and evidence-backed.
   Gate A review, writes `.agent-loop/state/quality_checks.md`, and references
   that evidence in Gate A and Gate B prompts. Ordinary failures remain reviewer
   evidence, matching Rust's non-blocking implementation quality behavior.
+- 2026-06-17: Ported `implement` browser/E2E evidence gates. Configured
+  `browser_test_commands` now run before implementation review, append to
+  `.agent-loop/state/quality_checks.md`, synthesize review/findings/status when
+  failing checks block, warn and continue when policy is non-blocking, and write
+  `browser-evidence-gate.md` / `AWAITING_INPUT` before review when
+  browser-facing work lacks browser evidence.
+- 2026-06-17: Ported unbounded batch `implement` retry for
+  `review_max_rounds=0`. Ordinary `NEEDS_CHANGES` reviews now continue to the
+  next implementation round until approval instead of returning the old
+  first-pass unsupported boundary; positive round caps still end in
+  `MAX_ROUNDS`.
+- 2026-06-17: Ported `implement` high-watermark logging for unbounded retry.
+  Node logs the unlimited-round safeguard at round 50 and every 25 rounds
+  after, while bounded `review_max_rounds` runs stay quiet.
 - 2026-06-17: Ported `next --task/--file` fresh input routing for supported
   selected commands. Tests cover parser shape plus routed `plan` and `spec`
   state setup while preserving no-input route-printing as the documented
@@ -506,6 +803,80 @@ keeping the JavaScript implementation simple, incremental, and evidence-backed.
   passed with 198 tests; `npm run lint` checked 75 JavaScript files;
   `git diff --check` was clean; `npm run parity:smoke` passed all 42 default
   Rust-vs-Node scenarios.
+  Latest `implement` browser/E2E evidence verification:
+  `npm test -- test/commands.test.js` passed with 121 tests; `npm test`
+  passed with 202 tests; `npm run lint` checked 77 JavaScript files;
+  `git diff --check` was clean; `npm run parity:smoke` passed all 42 default
+  Rust-vs-Node scenarios.
+  Latest `implement` unbounded retry verification:
+  `npm test -- test/commands.test.js` passed with 121 tests; `npm test`
+  passed with 202 tests; `npm run lint` checked 77 JavaScript files;
+  `git diff --check` was clean; `npm run parity:smoke` passed all 42 default
+  Rust-vs-Node scenarios.
+  Latest `implement` high-watermark verification:
+  `npm test -- test/commands.test.js` passed with 122 tests; `npm test`
+  passed with 203 tests; `npm run lint` checked 77 JavaScript files;
+  `git diff --check` was clean; `npm run parity:smoke` passed all 42 default
+  Rust-vs-Node scenarios.
+  Latest `goal` creation-state verification:
+  `npm test -- test/commands.test.js` passed with 124 tests; `npm test`
+  passed with 205 tests; `npm run lint` checked 77 JavaScript files;
+  `git diff --check` was clean; `npm run parity:smoke` passed all 42 default
+  Rust-vs-Node scenarios.
+  Latest `queue resume --run` state-prep verification:
+  `npm test -- test/commands.test.js` passed with 126 tests; `npm test`
+  passed with 207 tests; `npm run lint` checked 77 JavaScript files;
+  `git diff --check` was clean; `npm run parity:smoke` passed all 42 default
+  Rust-vs-Node scenarios.
+  Latest `goal resume --run` state-prep verification:
+  `npm test -- test/commands.test.js` passed with 127 tests; `npm test`
+  passed with 208 tests; `npm run lint` checked 77 JavaScript files;
+  `git diff --check` was clean; `npm run parity:smoke` passed all 42 default
+  Rust-vs-Node scenarios.
+  Latest `supervise --queue` state-prep/resume-detection verification:
+  `npm test -- test/commands.test.js` passed with 132 tests; `npm test`
+  passed with 213 tests; `npm run lint` checked 79 JavaScript files; targeted
+  `npm run parity:smoke -- --scenario supervise-queue-empty` passed, then
+  `npm run parity:smoke` passed all 43 default Rust-vs-Node scenarios.
+  Latest `resume` goal/queue action-required routing verification:
+  `npm test -- test/commands.test.js` passed with 133 tests; `npm test`
+  passed with 214 tests; `npm run lint` checked 79 JavaScript files; targeted
+  `npm run parity:smoke -- --scenario
+  resume-dry-run-deferred-queue,json-resume-dry-run-deferred-queue` passed;
+  `npm run parity:smoke` passed all 45 default Rust-vs-Node scenarios;
+  `npm test -- test/parity-smoke.test.js` passed with 3 tests; `git diff
+  --check` was clean.
+  Latest `resume` active queue hydration verification:
+  `npm test -- test/commands.test.js` passed with 134 tests; `npm test`
+  passed with 215 tests; `npm run lint` checked 79 JavaScript files;
+  `npm run parity:smoke` passed all 45 default Rust-vs-Node scenarios;
+  `npm test -- test/parity-smoke.test.js` passed with 3 tests; `git diff
+  --check` was clean.
+  Latest fresh single-phase `pipeline --phases verify` verification:
+  `npm test -- test/parser.test.js test/commands.test.js` passed with 175
+  tests; `npm test` passed with 232 tests; `npm run lint` checked 80
+  JavaScript files; `npm run parity:smoke` passed all 45 default
+  Rust-vs-Node scenarios; `git diff --check` was clean.
+  Latest fresh multi-phase `pipeline --phases implement,verify` verification:
+  `npm test -- test/parser.test.js test/commands.test.js` passed with 177
+  tests; `npm test` passed with 234 tests; `npm run lint` checked 80
+  JavaScript files; `npm run parity:smoke` passed all 45 default
+  Rust-vs-Node scenarios; `git diff --check` was clean.
+  Latest fresh runtime-only `pipeline --phases discuss,implement,verify`
+  verification: `npm test -- test/parser.test.js test/commands.test.js`
+  passed with 178 tests; `npm test` passed with 235 tests; `npm run lint`
+  checked 80 JavaScript files; `npm run parity:smoke` passed all 45 default
+  Rust-vs-Node scenarios; `git diff --check` was clean.
+  Latest `implement-verify --resume` supported-stage verification:
+  `npm test -- test/parser.test.js test/commands.test.js` passed with 180
+  tests; `npm test` passed with 237 tests; `npm run lint` checked 80
+  JavaScript files; `npm run parity:smoke` passed all 45 default
+  Rust-vs-Node scenarios; `git diff --check` was clean.
+  Latest `inline_auto_commit` checkpoint verification:
+  `npm test -- test/parser.test.js test/commands.test.js` passed with 181
+  tests; `npm test` passed with 238 tests; `npm run lint` checked 81
+  JavaScript files; `npm run parity:smoke` passed all 45 default
+  Rust-vs-Node scenarios; `git diff --check` was clean.
   Earlier installed Rust-vs-Node smokes matched exit code, stderr, and empty
   stdout for `inline` missing-task and empty-file input errors.
 

@@ -22,6 +22,7 @@ Commands:
   review     Run a standalone code review
   goal       Manage lifecycle goal state
   queue      Manage queued objective state
+  pipeline   Resume pipeline state
   list-agents
              List available agents as JSON
   init       Generate default .agent-loop.json

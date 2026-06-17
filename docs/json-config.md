@@ -76,15 +76,48 @@ Unknown root keys are rejected with `unknown .agent-loop.json key '<key>'`. The 
 set is the full Rust CLI key set, mirrored in `src/config/fileConfigSchema.js`. The Node
 CLI first pass only acts on a subset (role slots, `single_agent`, `requirements_workflow`,
 `next_skip_discuss`, `plan_requires_approval`, `decisions_enabled`, `models`,
-`action_providers`, `auto_test`, `batch_implement`, `review_max_rounds`,
+`action_providers`, `auto_commit`, `auto_push`, `auto_test`, `batch_implement`,
+`review_max_rounds`, `prompt_style`, `prompt_profile`, `progressive_context`,
+`discover_enabled`, `discover_max_rounds`,
+`discover_before_discuss`, `discover_before_plan`,
 `inline_quality_check`,
-`inline_auto_commit`, and `chain_default_command`).
+`inline_auto_commit`, `chain_default_command`, `new_context`,
+`planner_permission_mode`, `skills_enabled`, `blocked_skills`,
+`claude_full_access`, `claude_allowed_tools`, `reviewer_allowed_tools`,
+`claude_session_persistence`, `claude_max_output_tokens`,
+`claude_max_thinking_tokens`, `codex_full_access`, `codex_session_persistence`,
+`cursor_full_access`, and `cursor_session_persistence`).
+`prompt_style` accepts `normal` or `terse` and can be overridden by
+`AGENT_LOOP_PROMPT_STYLE`. `prompt_profile` supports the Rust built-in
+`xml_boundaries_v1`, explicit TOML profile paths, and named project profiles
+under `.agent-loop/profiles/<name>.toml` or `bench/profiles/<name>.toml`; the
+`PROMPT_PROFILE` environment variable overrides the file value. The Node first
+pass applies phase prompt overlays to the currently executed discovery and
+discuss prompts, system prompt overlays to provider invocations, and
+`progressive_context` state manifests to provider system prompts. Unported
+phase prompts remain pending parity work. `decisions_enabled` defaults to
+`false`, matching Rust, and can be overridden by `DECISIONS_ENABLED`.
+`progressive_context` defaults to `false`, matching Rust, and can be overridden
+by `PROGRESSIVE_CONTEXT`.
+Per-action environment overrides now follow Rust precedence below CLI flags and
+above `models`: `AGENT_LOOP_<ACTION>_MODEL` and
+`AGENT_LOOP_<ACTION>_EFFORT`, where `<ACTION>` is one of `PLAN`, `TASKS`,
+`IMPLEMENT`, `REVIEW`, `DISCUSS`, `DISCOVER`, `VERIFY`, `DEBUGGER`,
+`COMPOUND`, or `SUPERVISOR`.
+Claude, Codex, and Cursor CLI tuning follows Rust-shaped env/file/default
+precedence for the acted-on provider settings. `NEW_CONTEXT` or
+`new_context=true` disables Claude/Codex/Cursor session resume injection;
+`PLANNER_PERMISSION_MODE=plan` applies Claude planner `--permission-mode plan`;
+`SKILLS_ENABLED=false` adds Claude `--disable-slash-commands` and removes the
+constrained-mode `Skill` allowlist addition.
 `quality_commands`, `auto_test_cmd`, and `verify_auto_test` now affect automated
 `verify`; when neither explicit quality setting exists, automated `verify`
 detects Rust and JavaScript/TypeScript project quality commands from `Cargo.toml`
 or `package.json`. `inline` uses the same quality command resolution when both
 `inline_quality_check` and `auto_test` are enabled, but failed checks are
-non-blocking to match Rust inline behavior. `browser_test_commands`,
+non-blocking to match Rust inline behavior. `inline_auto_commit` follows Rust's
+broader `auto_commit` gate: successful inline runs commit non-state files only
+when both `inline_auto_commit` and `auto_commit` are true. `browser_test_commands`,
 `verify_browser_test`, and `browser_evidence_policy` also affect automated
 `verify` for configured browser/E2E checks and the verify-phase browser
 evidence gate. Broader implementation/supervisor browser phases remain pending
