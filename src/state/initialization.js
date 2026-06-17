@@ -1,4 +1,5 @@
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, readdir, rm } from "node:fs/promises";
+import { resolve } from "node:path";
 import { appendEvent, ensureEventStream } from "./events.js";
 import { initializeDecisions } from "./decisions.js";
 import { writeStateFile } from "./files.js";
@@ -26,8 +27,13 @@ const STALE_ARTIFACTS = [
 ];
 
 export async function resetStateDir(config) {
-  await rm(config.stateDir, { recursive: true, force: true });
   await mkdir(config.stateDir, { recursive: true });
+  for (const entry of await readdir(config.stateDir)) {
+    if (entry === "archive") {
+      continue;
+    }
+    await rm(resolve(config.stateDir, entry), { recursive: true, force: true });
+  }
 }
 
 export async function initializeWorkflowState(config, { task, workflow }) {

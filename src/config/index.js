@@ -13,6 +13,7 @@ const ROLE_SLOTS = ["implementer", "reviewer", "planner", "discoverer", "verifie
 const ACTION_KEYS = new Set(["plan", "tasks", "implement", "review", "discuss", "discover", "verify", "debugger", "compound", "supervisor"]);
 const MODEL_ENTRY_KEYS = new Set(["model", "effort"]);
 const EFFORTS = new Set(["minimal", "low", "medium", "high", "max", "xhigh"]);
+const BROWSER_EVIDENCE_POLICIES = new Set(["off", "warn", "block"]);
 
 function validateKnownRootKeys(fileConfig) {
   for (const key of Object.keys(fileConfig)) {
@@ -81,6 +82,73 @@ export function validateFileConfig(fileConfig) {
 function providerFromEnv(name, env) {
   const value = env[name.toUpperCase()];
   return value ? { provider: value, profile: { primary: { provider: value } } } : undefined;
+}
+
+function envBool(name, env) {
+  if (env[name] === undefined) {
+    return undefined;
+  }
+  return env[name] === "true";
+}
+
+function envUnsignedInteger(name, env) {
+  if (env[name] === undefined) {
+    return undefined;
+  }
+  if (!/^\d+$/.test(env[name])) {
+    throw new Error(`invalid value '${env[name]}' for ${name}: expected a non-negative integer`);
+  }
+  return Number.parseInt(env[name], 10);
+}
+
+function fileUnsignedInteger(value, key) {
+  if (value === undefined) {
+    return undefined;
+  }
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error(`${key} must be a non-negative integer`);
+  }
+  return value;
+}
+
+function envTrimmedString(name, env) {
+  const value = env[name];
+  return typeof value === "string" && value.trim() ? value.trim() : undefined;
+}
+
+function normalizeQualityCommands(value, key) {
+  if (value === undefined) {
+    return [];
+  }
+  if (!Array.isArray(value)) {
+    throw new Error(`${key} must be an array`);
+  }
+  return value.map((entry, index) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error(`${key}[${index}] must be an object`);
+    }
+    if (typeof entry.command !== "string" || !entry.command.trim()) {
+      throw new Error(`${key}[${index}].command must be a non-empty string`);
+    }
+    if (entry.remediation !== undefined && typeof entry.remediation !== "string") {
+      throw new Error(`${key}[${index}].remediation must be a string`);
+    }
+    return {
+      command: entry.command.trim(),
+      remediation: entry.remediation?.trim() || undefined,
+    };
+  });
+}
+
+function normalizeBrowserEvidencePolicy(value) {
+  if (typeof value !== "string" || !value.trim()) {
+    throw new Error("browser_evidence_policy must be one of: off, warn, or block");
+  }
+  const normalized = value.trim().toLowerCase();
+  if (!BROWSER_EVIDENCE_POLICIES.has(normalized)) {
+    throw new Error(`invalid browser evidence policy '${value}': expected off, warn, or block`);
+  }
+  return normalized;
 }
 
 function resolveRoles(fileConfig, cliGlobals, env) {
@@ -167,14 +235,35 @@ export async function loadConfig(projectDir, cli = {}, { env = process.env, now,
     }
   }
   emitConfigWarnings(warnings, { jsonMode: Boolean(cliGlobals.json), stderr });
+  const qualityCommands = normalizeQualityCommands(fileConfig.quality_commands, "quality_commands");
+  const browserTestCommands = normalizeQualityCommands(fileConfig.browser_test_commands, "browser_test_commands");
+  const browserEvidencePolicy = normalizeBrowserEvidencePolicy(envTrimmedString("BROWSER_EVIDENCE_POLICY", env) ?? fileConfig.browser_evidence_policy ?? "block");
   return {
     projectDir,
     stateDir: stateDirForSession(projectDir, cliGlobals.session),
     session: cliGlobals.session,
     jsonMode: Boolean(cliGlobals.json),
     newContext: Boolean(cliGlobals.newContext),
+    simpleMode: Boolean(cliGlobals.simple),
     requirementsWorkflow: cliGlobals.requirementsWorkflow ?? fileConfig.requirements_workflow ?? "legacy",
     nextSkipDiscuss: env.NEXT_SKIP_DISCUSS === "true" || Boolean(fileConfig.next_skip_discuss),
+    reviewMaxRounds: envUnsignedInteger("REVIEW_MAX_ROUNDS", env) ?? fileUnsignedInteger(fileConfig.review_max_rounds, "review_max_rounds") ?? 0,
+    discussMaxRounds: envUnsignedInteger("DISCUSS_MAX_ROUNDS", env) ?? fileConfig.discuss_max_rounds ?? 0,
+    diffMaxLines: envUnsignedInteger("DIFF_MAX_LINES", env) ?? fileConfig.diff_max_lines ?? 500,
+    batchImplement: envBool("BATCH_IMPLEMENT", env) ?? fileConfig.batch_implement ?? true,
+    autoTest: envBool("AUTO_TEST", env) ?? fileConfig.auto_test ?? false,
+    verifyAutoTest: envBool("VERIFY_AUTO_TEST", env) ?? fileConfig.verify_auto_test ?? true,
+    verifyBrowserTest: envBool("VERIFY_BROWSER_TEST", env) ?? fileConfig.verify_browser_test ?? browserTestCommands.length > 0,
+    chainDefaultCommand: envTrimmedString("CHAIN_DEFAULT_COMMAND", env) ?? (typeof fileConfig.chain_default_command === "string" && fileConfig.chain_default_command.trim() ? fileConfig.chain_default_command.trim() : "plan-tasks-implement"),
+    autoTestCmd: envTrimmedString("AUTO_TEST_CMD", env) ?? (typeof fileConfig.auto_test_cmd === "string" && fileConfig.auto_test_cmd.trim() ? fileConfig.auto_test_cmd.trim() : undefined),
+    qualityCommands,
+    browserTestCommands,
+    browserEvidencePolicy,
+    inlineQualityCheck: envBool("INLINE_QUALITY_CHECK", env) ?? fileConfig.inline_quality_check ?? true,
+    inlineAutoCommit: envBool("INLINE_AUTO_COMMIT", env) ?? fileConfig.inline_auto_commit ?? false,
+    discussMultiAgent: envBool("DISCUSS_MULTI_AGENT", env) ?? fileConfig.discuss_multi_agent ?? true,
+    freshContextReview: cliGlobals.simple ? false : (envBool("FRESH_CONTEXT_REVIEW", env) ?? fileConfig.fresh_context_review ?? true),
+    severityClassificationEnabled: cliGlobals.simple ? false : (fileConfig.severity_classification_enabled ?? true),
     planRequiresApproval: cliGlobals.requirePlanApproval || (!cliGlobals.noPlanApproval && Boolean(fileConfig.plan_requires_approval)),
     decisionsEnabled: fileConfig.decisions_enabled !== false,
     actionProviders,

@@ -17,6 +17,14 @@ export function agentLoopDir(projectDir) {
   return resolve(projectDir, ".agent-loop");
 }
 
+export function preferencesPath(projectDir) {
+  return resolve(agentLoopDir(projectDir), "preferences.md");
+}
+
+export function chainPath(projectDir) {
+  return resolve(agentLoopDir(projectDir), "chain.json");
+}
+
 export function stateDirForSession(projectDir, session) {
   const validated = validateSessionName(session);
   return validated

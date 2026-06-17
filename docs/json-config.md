@@ -29,6 +29,25 @@ not an object, is a hard error.
 }
 ```
 
+## Generate a starter config
+
+From a target project directory, run:
+
+```sh
+agent-loop-node init
+```
+
+The Node CLI writes `<project>/.agent-loop.json`. It refuses to overwrite an existing
+JSON config unless `--force` is passed. If only a legacy `.agent-loop.toml` exists, use
+the migration command below instead of `init` unless you intentionally want a fresh JSON
+config.
+
+When run from a Rust, PHP/Laravel, or JavaScript/TypeScript project, `init` adds the
+same project-aware starter settings as the Rust CLI in JSON form: `auto_test`,
+detected `quality_commands`, detected `browser_test_commands`, and a
+`browser_evidence_policy` of `block` when browser commands exist or `warn` when a web
+surface is detected without a deterministic browser command.
+
 - **Role slots** (`implementer`, `reviewer`, `planner`, `discoverer`, `verifier`,
   `supervisor_agent`) take a profile string:
   `<provider>[/<model>[/<effort>]][|<handoff-provider>/<handoff-model>[/<handoff-effort>]]`.
@@ -57,9 +76,19 @@ Unknown root keys are rejected with `unknown .agent-loop.json key '<key>'`. The 
 set is the full Rust CLI key set, mirrored in `src/config/fileConfigSchema.js`. The Node
 CLI first pass only acts on a subset (role slots, `single_agent`, `requirements_workflow`,
 `next_skip_discuss`, `plan_requires_approval`, `decisions_enabled`, `models`,
-`action_providers`); the remaining keys are accepted for compatibility with Rust CLI
-configs but currently have no Node-side effect — see `docs/unsupported.md` for what the
-first pass implements.
+`action_providers`, `auto_test`, `batch_implement`, `review_max_rounds`,
+`inline_quality_check`,
+`inline_auto_commit`, and `chain_default_command`).
+`quality_commands`, `auto_test_cmd`, and `verify_auto_test` now affect automated
+`verify`; when neither explicit quality setting exists, automated `verify`
+detects Rust and JavaScript/TypeScript project quality commands from `Cargo.toml`
+or `package.json`. `inline` uses the same quality command resolution when both
+`inline_quality_check` and `auto_test` are enabled, but failed checks are
+non-blocking to match Rust inline behavior. `browser_test_commands`,
+`verify_browser_test`, and `browser_evidence_policy` also affect automated
+`verify` for configured browser/E2E checks and the verify-phase browser
+evidence gate. Broader implementation/supervisor browser phases remain pending
+— see `docs/unsupported.md` for what the first pass implements.
 
 ## Migration from `.agent-loop.toml`
 

@@ -11,7 +11,8 @@ export function emitElapsed(started, { jsonMode = false, preferStderr = false, s
     }
     return;
   }
-  stdout.write(`elapsed: ${(elapsedMs / 1000).toFixed(2)}s\n`);
+  const stream = preferStderr ? stderr : stdout;
+  stream.write(`elapsed: ${(elapsedMs / 1000).toFixed(2)}s\n`);
 }
 
 function isInterrupted(error) {
@@ -24,8 +25,11 @@ export async function runMain({
   cwd = process.cwd(),
   stdout = process.stdout,
   stderr = process.stderr,
+  stdin = process.stdin,
   stderrIsTTY = process.stderr.isTTY,
   now,
+  agentRunner,
+  readAnswer,
 } = {}) {
   const started = Date.now();
   const jsonRequested = isJsonRequested(argv);
@@ -52,7 +56,7 @@ export async function runMain({
     }
     parsed.cli.actionOverrides = collectActionOverrides(parsed.cli.globals.actionOverrides);
     const dispatch = dispatchFromCli(parsed.cli);
-    const code = await executeDispatch(dispatch, { argv, env, cwd, stdout, stderr, stderrIsTTY, now });
+    const code = await executeDispatch(dispatch, { argv, env, cwd, stdout, stderr, stdin, stderrIsTTY, now, agentRunner, readAnswer });
     if (!printsElapsedInternally(dispatch)) {
       emitElapsed(started, {
         jsonMode: parsed.cli.globals.json,

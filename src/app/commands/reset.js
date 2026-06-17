@@ -8,12 +8,16 @@ export async function runReset(cli, context) {
   if (cli.commandArgs.waveLock) {
     try {
       await rm(waveLockPathForSession(config.projectDir, config.session), { force: false });
-      context.stdout.write("Wave lock removed.\n");
+      if (!config.jsonMode) {
+        context.stdout.write("Wave lock removed.\n");
+      }
     } catch (error) {
       if (error.code !== "ENOENT") {
         throw error;
       }
-      context.stdout.write("No wave lock found.\n");
+      if (!config.jsonMode) {
+        context.stdout.write("No wave lock found.\n");
+      }
     }
     return 0;
   }
@@ -30,6 +34,8 @@ export async function runReset(cli, context) {
     }
   }
   await rm(waveJournalPathForSession(config.projectDir, config.session), { force: true });
-  context.stdout.write("State reset.\n");
+  if (!config.jsonMode) {
+    context.stdout.write("State cleared. decisions.md preserved.\n");
+  }
   return 0;
 }

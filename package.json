@@ -10,6 +10,7 @@
     "test": "node --test",
     "lint": "node scripts/lint.js",
     "migrate-config": "node scripts/migrate-config.js",
+    "parity:smoke": "node scripts/parity-smoke.js",
     "check:rust-version": "node scripts/check-rust-version.js",
     "update:rust-version": "node scripts/update-rust-version.js"
   },

@@ -5,7 +5,6 @@ import { initializeWorkflowState, resetStateDir } from "../../state/initializati
 import { assertNoActiveWaveLock } from "../../state/waveLock.js";
 import { loadConfig } from "../../config/index.js";
 import { loadPlanForTasksPhase, preserveOrDeriveTask, readTaskInput } from "../../workflow/plan.js";
-import { handleUnsupportedCommand } from "../../unsupported/handler.js";
 
 async function stateFileExists(config, fileName) {
   try {
@@ -16,7 +15,7 @@ async function stateFileExists(config, fileName) {
   }
 }
 
-async function requireResumeWorkflow(config, workflow, requiredFile) {
+export async function requireResumeWorkflow(config, workflow, requiredFile) {
   const existingWorkflow = (await readStateFile(config, "workflow.txt")).trim();
   if (!existingWorkflow) {
     const cause = (await stateFileExists(config, "workflow.txt")) ? "workflow.txt is empty" : "workflow.txt is missing";
@@ -87,16 +86,4 @@ export async function runTasks(cli, context) {
   await removeStateFile(config, "tasks_findings.json");
   context.stdout.write("Tasks state initialized. Runtime decomposition is unsupported in node-cli first pass.\n");
   return 0;
-}
-
-export async function runVerify(cli, context) {
-  const config = await loadConfig(context.cwd, cli, context);
-  const workflow = (await readStateFile(config, "workflow.txt")).trim();
-  if (cli.commandArgs.resume && workflow !== "verify") {
-    if (!workflow) {
-      throw new Error("Cannot resume verify: workflow.txt is missing or empty.");
-    }
-    throw new Error(`Cannot resume verify: state belongs to workflow '${workflow}' (expected 'verify').`);
-  }
-  return handleUnsupportedCommand("verify", context);
 }

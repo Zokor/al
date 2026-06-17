@@ -6,6 +6,7 @@ import { computeNextAction } from "./next.js";
 import { pipelineResumeCommand, pipelineResumeStateIsActive, readPipelineResumeState } from "../../workflow/pipelineResumeState.js";
 
 const ATTENTION_QUEUE_STATUSES = new Set(["active", "split", "implementing", "verifying", "blocked", "deferred"]);
+const RESUMABLE_WORKFLOWS = new Set(["spec", "plan", "decompose", "implement", "review", "verify", "discuss"]);
 
 export async function prepareResumeGoalQueueContext(config) {
   const goal = await readJsonStateFile(config, "goal.json");
@@ -85,7 +86,19 @@ export async function runResume(cli, context) {
     return 0;
   }
   if (!(await hasResumableState(config))) {
-    context.stderr.write("No resumable state found. Start a new run with `agent-loop supervise --file <task.md>` or another pipeline command.\n");
+    emitJsonCommandStarted(context, config);
+    if (!config.jsonMode) {
+      context.stderr.write("No resumable state found. Start a new run with `agent-loop supervise --file <task.md>` or another pipeline command.\n");
+    }
+    return 1;
+  }
+  const integrityIssue = await resumeStateIntegrityIssue(config);
+  if (integrityIssue) {
+    emitJsonCommandStarted(context, config);
+    if (!config.jsonMode) {
+      context.stderr.write(`Cannot resume: ${integrityIssue}.\n`);
+      context.stderr.write("Run 'agent-loop reset' to clear the corrupted state, then start a new run.\n");
+    }
     return 1;
   }
   if (selected.unsupported) {
@@ -101,4 +114,36 @@ export async function runResume(cli, context) {
   }
   context.stdout.write(`${selected.command}\n`);
   return 0;
+}
+
+async function resumeStateIntegrityIssue(config) {
+  const status = await readJsonStateFile(config, "status.json");
+  if (status?.status !== "INTERRUPTED") {
+    return null;
+  }
+  const workflow = (await readStateFile(config, "workflow.txt")).trim();
+  if (!workflow) {
+    return "status.json reports an interrupted run but workflow.txt is missing";
+  }
+  if (!RESUMABLE_WORKFLOWS.has(workflow)) {
+    return "status.json reports an interrupted run but workflow.txt is invalid";
+  }
+  return null;
+}
+
+function emitJsonCommandStarted(context, config) {
+  if (!config.jsonMode) {
+    return;
+  }
+  const ts = (config.now ? config.now() : new Date()).toISOString();
+  context.stdout.write(`${JSON.stringify({
+    type: "command_started",
+    protocol_version: 1,
+    seq: 1,
+    ts,
+    data: {
+      command: "resume",
+      isPipeline: false,
+    },
+  })}\n`);
 }

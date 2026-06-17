@@ -114,6 +114,28 @@ test("single-agent env override collapses roles in both directions", async () =>
   assert.equal(single.roles.reviewer, "codex");
 });
 
+test("review_max_rounds loads from JSON and REVIEW_MAX_ROUNDS overrides it", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  await writeFile(resolve(project, ".agent-loop.json"), JSON.stringify({ review_max_rounds: 2 }));
+  const fromFile = await loadConfig(project, { globals: {}, commandArgs: {} }, { env: {} });
+  assert.equal(fromFile.reviewMaxRounds, 2);
+
+  const fromEnv = await loadConfig(project, { globals: {}, commandArgs: {} }, { env: { REVIEW_MAX_ROUNDS: "3" } });
+  assert.equal(fromEnv.reviewMaxRounds, 3);
+
+  const invalidFileProject = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  await writeFile(resolve(invalidFileProject, ".agent-loop.json"), JSON.stringify({ review_max_rounds: -1 }));
+  await assert.rejects(
+    () => loadConfig(invalidFileProject, { globals: {}, commandArgs: {} }, { env: {} }),
+    /review_max_rounds must be a non-negative integer/,
+  );
+
+  await assert.rejects(
+    () => loadConfig(project, { globals: {}, commandArgs: {} }, { env: { REVIEW_MAX_ROUNDS: "-1" } }),
+    /invalid value '-1' for REVIEW_MAX_ROUNDS: expected a non-negative integer/,
+  );
+});
+
 test("corrupt .agent-loop.json fails with an actionable parse error", async () => {
   const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
   await writeFile(resolve(project, ".agent-loop.json"), "{not json");

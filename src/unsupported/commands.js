@@ -1,25 +1,13 @@
 export const UNSUPPORTED_COMMANDS = Object.freeze([
-  "analyze-coverage",
-  "implement",
   "plan-tasks-implement",
   "plan-implement",
   "tasks-implement",
-  "review",
-  "init",
   "tui",
-  "inline",
-  "discuss",
-  "chain",
-  "goal",
-  "queue",
   "supervise",
   "pipeline",
-  "approve",
-  "reject",
   "plan-tasks-implement-verify",
   "plan-implement-verify",
   "tasks-implement-verify",
-  "implement-verify",
   "discuss-plan-tasks-implement",
   "discuss-plan-implement",
   "discuss-plan-implement-verify",
@@ -48,7 +36,6 @@ export const UNSUPPORTED_COMMANDS = Object.freeze([
   "plan-tasks-verify",
   "discuss-plan-verify",
   "discuss-plan-tasks-verify",
-  "list-agents",
 ]);
 
 export const UNSUPPORTED_COMMAND_SET = new Set(UNSUPPORTED_COMMANDS);

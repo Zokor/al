@@ -37,6 +37,9 @@ export async function pipelineResumeStateIsActive(config) {
     return false;
   }
   const status = await readJsonStateFile(config, "status.json");
+  if (!status) {
+    return true;
+  }
   return !TERMINAL_PIPELINE_STATUSES.has(status?.status);
 }
 

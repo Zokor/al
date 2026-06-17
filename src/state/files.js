@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { dirname, resolve, sep } from "node:path";
 
 export function safeStatePath(config, fileName) {
@@ -74,6 +74,17 @@ export async function writeStateFile(config, fileName, content) {
     const tempPath = `${path}.tmp-${process.pid}-${Date.now()}`;
     await writeFile(tempPath, content, "utf8");
     await rename(tempPath, path);
+  } finally {
+    finishWrite();
+  }
+}
+
+export async function appendStateFile(config, fileName, content) {
+  const path = safeStatePath(config, fileName);
+  inFlightWrites += 1;
+  try {
+    await mkdir(dirname(path), { recursive: true });
+    await appendFile(path, content, "utf8");
   } finally {
     finishWrite();
   }
