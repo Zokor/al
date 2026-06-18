@@ -44,12 +44,25 @@ const AGENT_RUNTIME_DISPATCHES = new Set([
   DispatchKind.Unsupported,
 ]);
 
+const SUPPRESSED_ELAPSED_DISPATCHES = new Set([
+  DispatchKind.Resume,
+  DispatchKind.ListAgents,
+  DispatchKind.Completions,
+]);
+
 export function printsElapsedInternally(dispatch) {
   return AGENT_RUNTIME_DISPATCHES.has(dispatch.kind);
 }
 
+export function suppressesElapsed(dispatch) {
+  if (dispatch.kind === DispatchKind.Goal && dispatch.cli?.commandArgs?.goalCommand === "resume" && dispatch.cli.commandArgs.run) {
+    return true;
+  }
+  return SUPPRESSED_ELAPSED_DISPATCHES.has(dispatch.kind);
+}
+
 export function elapsedPrefersStderr(dispatch, jsonMode) {
-  return Boolean(jsonMode) || dispatch.kind === DispatchKind.ListAgents || dispatch.kind === DispatchKind.Completions;
+  return Boolean(jsonMode);
 }
 
 export function needsSignalHandlers(dispatch) {

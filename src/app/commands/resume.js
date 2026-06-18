@@ -1,8 +1,10 @@
 import { readJsonStateFile, readStateFile } from "../../state/files.js";
 import { loadConfig } from "../../config/index.js";
 import { hasResumableState, supervisorResumePhasesFromStateDir } from "../../state/resumeState.js";
+import { completeGoalIfCurrent, readGoal } from "../../state/goal.js";
+import { finalizeQueueRunFromGoalStatus } from "../../state/queue.js";
 import { handleUnsupportedCommand } from "../../unsupported/handler.js";
-import { computeNextAction, runResumeWorkflowSelection } from "./next.js";
+import { runNext, runResumeWorkflowSelection } from "./next.js";
 import { prepareQueueRunGoal } from "./queueRunState.js";
 import { pipelineResumeCommand, pipelineResumeStateIsActive, readPipelineResumeState } from "../../workflow/pipelineResumeState.js";
 
@@ -107,8 +109,10 @@ export async function selectResumeCommand(config) {
 
 export async function runResume(cli, context) {
   const config = await loadConfig(context.cwd, cli, context);
+  let finalization = emptyResumeFinalization();
   if (!cli.commandArgs.dryRun) {
     await hydrateActiveQueueGoalForResume(config);
+    finalization = await resumeFinalizationContext(config);
   }
   const selected = await selectResumeCommand(config);
   if (cli.commandArgs.dryRun) {
@@ -150,22 +154,18 @@ export async function runResume(cli, context) {
   if (selected.preamble && !config.jsonMode) {
     context.stdout.write(`${selected.preamble}\n`);
   }
+  let code;
   if (selected.resumeWorkflow) {
-    return runResumeWorkflowSelection(selected.workflow, cli, context);
+    code = await runResumeWorkflowSelection(selected.workflow, cli, context);
+  } else if (selected.unsupported) {
+    code = await handleUnsupportedCommand(selected.unsupported, context, selected.command);
+  } else if (selected.fallbackNext) {
+    code = await runNext({ ...cli, command: "next", commandArgs: {} }, context);
+  } else {
+    context.stdout.write(`${selected.command}\n`);
+    code = 0;
   }
-  if (selected.unsupported) {
-    return handleUnsupportedCommand(selected.unsupported, context, selected.command);
-  }
-  if (selected.fallbackNext) {
-    const selectedNext = await computeNextAction(config);
-    if (["spec", "plan", "tasks"].includes(selectedNext)) {
-      context.stdout.write(`agent-loop ${selectedNext}\n`);
-      return 0;
-    }
-    return handleUnsupportedCommand(selectedNext, context);
-  }
-  context.stdout.write(`${selected.command}\n`);
-  return 0;
+  return finalizeResumeRun(config, code, finalization, { finalizeQueueOnNonZero: Boolean(selected.fallbackNext) });
 }
 
 function goalActionRequiredMessage(goal) {
@@ -195,6 +195,36 @@ async function resumeStateIntegrityIssue(config) {
     return "status.json reports an interrupted run but workflow.txt is invalid";
   }
   return null;
+}
+
+async function resumeFinalizationContext(config) {
+  const goalContext = await prepareResumeGoalQueueContext(config);
+  return {
+    activeGoalId: goalContext.goal?.status === "active" ? goalContext.goal.goal_id : null,
+    activeQueueId: ACTIVE_QUEUE_STATUSES.has(goalContext.attention?.status) ? goalContext.attention.queue_id : null,
+  };
+}
+
+function emptyResumeFinalization() {
+  return { activeGoalId: null, activeQueueId: null };
+}
+
+async function finalizeResumeRun(config, code, finalization, { finalizeQueueOnNonZero = false } = {}) {
+  if (!finalization.activeGoalId && !finalization.activeQueueId) {
+    return code;
+  }
+  if (code === 0 && finalization.activeGoalId) {
+    await completeGoalIfCurrent(config, finalization.activeGoalId);
+  }
+  if (finalization.activeQueueId && (code === 0 || finalizeQueueOnNonZero)) {
+    const goal = finalization.activeGoalId ? await readGoal(config) : null;
+    await finalizeQueueRunFromGoalStatus(config, finalization.activeQueueId, {
+      goalStatus: goal?.status,
+      reason: goal?.reason,
+      exitCode: code,
+    });
+  }
+  return code;
 }
 
 function emitJsonCommandStarted(context, config) {

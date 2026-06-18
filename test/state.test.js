@@ -8,7 +8,7 @@ import { initializeWorkflowState } from "../src/state/initialization.js";
 import { writeFindings } from "../src/state/findings.js";
 import { writeStatus } from "../src/state/status.js";
 import { readStateFile } from "../src/state/files.js";
-import { stateDirForSession, waveJournalPathForSession, waveLockPathForSession } from "../src/state/paths.js";
+import { stateDirForSession, validateSessionName, waveJournalPathForSession, waveLockPathForSession } from "../src/state/paths.js";
 
 test("state and wave paths match session layout", () => {
   const project = "/tmp/example";
@@ -16,7 +16,28 @@ test("state and wave paths match session layout", () => {
   assert.equal(stateDirForSession(project, "demo_1"), "/tmp/example/.agent-loop/state/demo_1");
   assert.equal(waveLockPathForSession(project, "demo_1"), "/tmp/example/.agent-loop/wave-demo_1.lock");
   assert.equal(waveJournalPathForSession(project, "demo_1"), "/tmp/example/.agent-loop/wave-progress-demo_1.jsonl");
-  assert.throws(() => stateDirForSession(project, "../bad"), /invalid session/);
+  assert.throws(
+    () => stateDirForSession(project, "../bad"),
+    /Config error: Invalid session name '\.\.\/bad': only alphanumeric, hyphens, and underscores allowed\./,
+  );
+});
+
+test("session validation error messages match Rust", () => {
+  assert.equal(validateSessionName(undefined), undefined);
+  assert.equal(validateSessionName(null), undefined);
+  assert.equal(validateSessionName("demo-1"), "demo-1");
+  assert.throws(
+    () => validateSessionName(""),
+    /Config error: Session name cannot be empty\./,
+  );
+  assert.throws(
+    () => validateSessionName("a".repeat(65)),
+    /Config error: Session name too long \(65 chars, max 64\): a{65}/,
+  );
+  assert.throws(
+    () => validateSessionName("../bad"),
+    /Config error: Invalid session name '\.\.\/bad': only alphanumeric, hyphens, and underscores allowed\./,
+  );
 });
 
 test("initializeWorkflowState writes compatible baseline files", async () => {

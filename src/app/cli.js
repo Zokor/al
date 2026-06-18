@@ -1,4 +1,4 @@
-import { formatHelpText, helpEvent } from "./help.js";
+import { commandHelpEvent, formatCommandHelpText, formatHelpText, helpEvent } from "./help.js";
 import { formatVersionText, versionEvent } from "./version.js";
 import { UNSUPPORTED_COMMAND_SET } from "../unsupported/commands.js";
 import { COMPLETION_SHELLS } from "./completionSurface.js";
@@ -46,8 +46,200 @@ const SPECIFIC_ACTION_FLAGS = new Map([
   ["debugger-effort", ["debugger", "effort"]],
   ["compound-effort", ["compound", "effort"]],
 ]);
+const ACTION_OVERRIDE_VALUE_PLACEHOLDERS = Object.freeze({
+  "action-model": "ACTION=MODEL",
+  "action-effort": "ACTION=EFFORT",
+  "plan-model": "MODEL",
+  "tasks-model": "MODEL",
+  "implement-model": "MODEL",
+  "review-model": "MODEL",
+  "discuss-model": "MODEL",
+  "discover-model": "MODEL",
+  "verify-model": "MODEL",
+  "debugger-model": "MODEL",
+  "compound-model": "MODEL",
+  "plan-effort": "LEVEL",
+  "tasks-effort": "LEVEL",
+  "implement-effort": "LEVEL",
+  "review-effort": "LEVEL",
+  "discuss-effort": "LEVEL",
+  "discover-effort": "LEVEL",
+  "verify-effort": "LEVEL",
+  "debugger-effort": "LEVEL",
+  "compound-effort": "LEVEL",
+});
 
 class ParseError extends Error {}
+
+function completionsMissingShellError() {
+  return "Config error: error: the following required arguments were not provided:\n  <SHELL>\n\nUsage: agent-loop completions <SHELL>\n\nFor more information, try '--help'.";
+}
+
+function completionsInvalidShellError(shell) {
+  return `Config error: error: invalid value '${shell}' for '<SHELL>'\n  [possible values: ${COMPLETION_SHELLS.join(", ")}]\n\nFor more information, try '--help'.`;
+}
+
+function completionsUnexpectedArgumentError(token) {
+  return `Config error: error: unexpected argument '${token}' found\n\nUsage: agent-loop completions [OPTIONS] <SHELL>\n\nFor more information, try '--help'.`;
+}
+
+const GLOBAL_VALUE_PLACEHOLDERS = Object.freeze({
+  session: "NAME",
+  "requirements-workflow": "MODE",
+  implementer: "AGENT",
+  reviewer: "AGENT",
+});
+const COMMAND_VALUE_PLACEHOLDERS = Object.freeze({
+  base: "BASE",
+  command: "COMMAND",
+  "depends-on": "ID",
+  file: "PATH",
+  files: "FILES...",
+  "max-parallel": "MAX_PARALLEL",
+  "max-retries": "MAX_RETRIES",
+  objective: "TEXT",
+  phases: "PHASES",
+  plan: "PLAN",
+  priority: "PRIORITY",
+  reason: "REASON",
+  "round-step": "ROUND_STEP",
+  task: "TASK",
+});
+const COMMAND_USAGE = Object.freeze({
+  approve: "agent-loop approve [OPTIONS] <PHASE>",
+  completions: "agent-loop completions [OPTIONS] <SHELL>",
+  queue: "agent-loop queue [OPTIONS] <COMMAND>",
+  reject: "agent-loop reject [OPTIONS] --reason <REASON> <PHASE>",
+});
+const COMMAND_BOOLEAN_USAGE = Object.freeze({
+  "chain:resume": "agent-loop chain --resume <FILES>...",
+  "discuss:discover": "agent-loop discuss --discover",
+  "discuss:resume": "agent-loop discuss --resume",
+  "goal:discover": "agent-loop goal --discover [OBJECTIVE]...",
+  "goal:replace": "agent-loop goal --replace [OBJECTIVE]...",
+  "goal:run": "agent-loop goal resume --run",
+  "goal:single-agent": "agent-loop goal --single-agent [OBJECTIVE]...",
+  "implement:continue-on-fail": "agent-loop implement --continue-on-fail",
+  "implement:fail-fast": "agent-loop implement --fail-fast",
+  "implement:per-task": "agent-loop implement --per-task",
+  "implement:resume": "agent-loop implement --resume",
+  "implement:single-agent": "agent-loop implement --single-agent",
+  "implement:wave": "agent-loop implement --wave",
+  "implement-verify:continue-on-fail": "agent-loop implement-verify --continue-on-fail",
+  "implement-verify:fail-fast": "agent-loop implement-verify --fail-fast",
+  "implement-verify:per-task": "agent-loop implement-verify --per-task",
+  "implement-verify:resume": "agent-loop implement-verify --resume",
+  "implement-verify:single-agent": "agent-loop implement-verify --single-agent",
+  "implement-verify:wave": "agent-loop implement-verify --wave",
+  "init:force": "agent-loop init --force",
+  "pipeline:discover": "agent-loop pipeline --discover --phases <PHASES>",
+  "pipeline:resume": "agent-loop pipeline --resume --phases <PHASES>",
+  "pipeline:single-agent": "agent-loop pipeline --single-agent --phases <PHASES>",
+  "plan:discover": "agent-loop plan --discover [TASK]",
+  "plan:resume": "agent-loop plan --resume [TASK]",
+  "plan:single-agent": "agent-loop plan --single-agent [TASK]",
+  "queue:run": "agent-loop queue resume --run <QUEUE_ID>",
+  "reset:wave-lock": "agent-loop reset --wave-lock",
+  "review:single-agent": "agent-loop review --single-agent [CONTEXT]",
+  "resume:dry-run": "agent-loop resume --dry-run",
+  "spec:discover": "agent-loop spec --discover [TASK]",
+  "spec:resume": "agent-loop spec --resume [TASK]",
+  "spec:single-agent": "agent-loop spec --single-agent [TASK]",
+  "supervise:discover": "agent-loop supervise --discover [TASK]",
+  "supervise:queue": "agent-loop supervise --queue [TASK]",
+  "supervise:resume": "agent-loop supervise --resume [TASK]",
+  "supervise:single-agent": "agent-loop supervise --single-agent [TASK]",
+  "tasks:resume": "agent-loop tasks --resume",
+  "tasks:single-agent": "agent-loop tasks --single-agent",
+  "verify:manual": "agent-loop verify --manual",
+  "verify:resume": "agent-loop verify --resume",
+});
+
+function globalValueRequiredError(name) {
+  const possibleValues = name === "requirements-workflow"
+    ? "\n  [possible values: legacy, spec]"
+    : "";
+  return `Config error: error: a value is required for '--${name} <${GLOBAL_VALUE_PLACEHOLDERS[name]}>' but none was supplied${possibleValues}\n\nFor more information, try '--help'.`;
+}
+
+function configError(message) {
+  return `Config error: ${message}`;
+}
+
+function commandValueRequiredError(name, placeholder = COMMAND_VALUE_PLACEHOLDERS[name] ?? name.toUpperCase()) {
+  const display = placeholder.endsWith("...")
+    ? `<${placeholder.slice(0, -3)}>...`
+    : `<${placeholder}>`;
+  return configError(`error: a value is required for '--${name} ${display}' but none was supplied\n\nFor more information, try '--help'.`);
+}
+
+function commandInvalidValueError(name, value, placeholder = COMMAND_VALUE_PLACEHOLDERS[name] ?? name.toUpperCase()) {
+  return configError(`error: invalid value '${value}' for '--${name} <${placeholder}>': invalid digit found in string\n\nFor more information, try '--help'.`);
+}
+
+function requiredArgumentsError(requiredLines, usage) {
+  return configError(`error: the following required arguments were not provided:\n${requiredLines.map((line) => `  ${line}`).join("\n")}\n\nUsage: ${usage}\n\nFor more information, try '--help'.`);
+}
+
+function approvalRequiredArgumentsError(command, result) {
+  if (command === "approve") {
+    return requiredArgumentsError(["<PHASE>"], "agent-loop approve <PHASE>");
+  }
+  const missing = [];
+  if (!result.reason?.trim()) {
+    missing.push("--reason <REASON>");
+  }
+  if (result.positional.length === 0) {
+    missing.push("<PHASE>");
+  }
+  return requiredArgumentsError(missing, "agent-loop reject --reason <REASON> <PHASE>");
+}
+
+function pipelineRequiredPhasesError(result) {
+  const inputUsage = result.task !== undefined
+    ? " --task <TASK>"
+    : result.file !== undefined
+      ? " --file <FILE>"
+      : "";
+  return requiredArgumentsError(["--phases <PHASES>"], `agent-loop pipeline --phases <PHASES>${inputUsage}`);
+}
+
+function actionOverrideValueRequiredError(name) {
+  return configError(`error: a value is required for '--${name} <${ACTION_OVERRIDE_VALUE_PLACEHOLDERS[name]}>' but none was supplied\n\nFor more information, try '--help'.`);
+}
+
+function requirementsWorkflowInvalidError(value) {
+  return `Config error: error: invalid value '${value}' for '--requirements-workflow <MODE>'\n  [possible values: legacy, spec]\n\nFor more information, try '--help'.`;
+}
+
+function booleanGlobalUnexpectedValueError(name, value) {
+  return `Config error: error: unexpected value '${value}' for '--${name}' found; no more were expected\n\nUsage: agent-loop --${name}\n\nFor more information, try '--help'.`;
+}
+
+function planApprovalConflictError() {
+  return "Config error: error: the argument '--require-plan-approval' cannot be used with '--no-plan-approval'\n\nUsage: agent-loop [OPTIONS] [COMMAND]\n\nFor more information, try '--help'.";
+}
+
+function unexpectedGlobalArgumentError(token) {
+  return `Config error: error: unexpected argument '${token}' found\n\nUsage: agent-loop [OPTIONS] [COMMAND]\n\nFor more information, try '--help'.`;
+}
+
+function unknownCommandError(command) {
+  return configError(`error: unrecognized subcommand '${command}'\n\nUsage: agent-loop [OPTIONS] [COMMAND]\n\nFor more information, try '--help'.`);
+}
+
+function unknownSubcommandError(command, subcommand) {
+  return configError(`error: unrecognized subcommand '${subcommand}'\n\nUsage: ${COMMAND_USAGE[command] ?? `agent-loop ${command} [OPTIONS] <COMMAND>`}\n\nFor more information, try '--help'.`);
+}
+
+function commandUnexpectedArgumentError(command, token) {
+  return configError(`error: unexpected argument '${token}' found\n\nUsage: ${COMMAND_USAGE[command] ?? `agent-loop ${command} [OPTIONS]`}\n\nFor more information, try '--help'.`);
+}
+
+function commandBooleanUnexpectedValueError(command, name, value) {
+  const usage = COMMAND_BOOLEAN_USAGE[`${command}:${name}`] ?? `agent-loop ${command} --${name}`;
+  return configError(`error: unexpected value '${value}' for '--${name}' found; no more were expected\n\nUsage: ${usage}\n\nFor more information, try '--help'.`);
+}
 
 function optionName(token) {
   return token.startsWith("--") ? token.slice(2).split("=")[0] : token;
@@ -62,18 +254,40 @@ function splitOption(token) {
   return [withoutPrefix.slice(0, index), withoutPrefix.slice(index + 1)];
 }
 
-function takeOptionValue(argv, index, inlineValue, name) {
+function takeOptionValue(argv, index, inlineValue, name, placeholder) {
   if (inlineValue !== undefined) {
     return [inlineValue, index];
   }
   const value = argv[index + 1];
   if (value === undefined || value.startsWith("-")) {
-    throw new ParseError(`missing value for --${name}`);
+    throw new ParseError(commandValueRequiredError(name, placeholder));
   }
   return [value, index + 1];
 }
 
-function takeManyOptionValues(argv, index, inlineValue, name) {
+function takeGlobalOptionValue(argv, index, inlineValue, name) {
+  if (inlineValue !== undefined) {
+    return [inlineValue, index];
+  }
+  const value = argv[index + 1];
+  if (value === undefined || value.startsWith("-")) {
+    throw new ParseError(globalValueRequiredError(name));
+  }
+  return [value, index + 1];
+}
+
+function takeActionOverrideValue(argv, index, inlineValue, name) {
+  if (inlineValue !== undefined) {
+    return [inlineValue, index];
+  }
+  const value = argv[index + 1];
+  if (value === undefined || value.startsWith("-")) {
+    throw new ParseError(actionOverrideValueRequiredError(name));
+  }
+  return [value, index + 1];
+}
+
+function takeManyOptionValues(argv, index, inlineValue, name, placeholder) {
   const values = [];
   let nextIndex = index;
   if (inlineValue !== undefined) {
@@ -84,7 +298,7 @@ function takeManyOptionValues(argv, index, inlineValue, name) {
     nextIndex += 1;
   }
   if (values.length === 0) {
-    throw new ParseError(`missing value for --${name}`);
+    throw new ParseError(commandValueRequiredError(name, placeholder));
   }
   return [values, nextIndex];
 }
@@ -92,19 +306,19 @@ function takeManyOptionValues(argv, index, inlineValue, name) {
 function parseGenericActionValue(raw, flag) {
   const separator = raw.indexOf("=");
   if (separator === -1) {
-    throw new ParseError(`invalid --${flag} value '${raw}': expected ACTION=${flag.endsWith("model") ? "MODEL" : "EFFORT"}`);
+    throw new ParseError(configError(`invalid --${flag} value '${raw}': expected ACTION=${flag.endsWith("model") ? "MODEL" : "EFFORT"}`));
   }
   const action = raw.slice(0, separator);
   const value = raw.slice(separator + 1);
   if (!ACTIONS.has(action)) {
-    throw new ParseError(`unknown action '${action}': expected one of ${Array.from(ACTIONS).join(", ")}`);
+    throw new ParseError(configError(`unknown action '${action}': expected one of ${Array.from(ACTIONS).join(", ")}`));
   }
   return [action, value];
 }
 
 function validateEffort(value) {
   if (!EFFORTS.has(value)) {
-    throw new ParseError(`unknown effort level '${value}': expected one of ${Array.from(EFFORTS).join(", ")}`);
+    throw new ParseError(configError(`unknown effort level '${value}': expected one of ${Array.from(EFFORTS).join(", ")}`));
   }
 }
 
@@ -116,19 +330,19 @@ function parseGlobal(argv, index, globals) {
   const [name, inlineValue] = splitOption(token);
   if (BOOLEAN_GLOBALS.has(name)) {
     if (inlineValue !== undefined) {
-      throw new ParseError(`unexpected value for --${name}`);
+      throw new ParseError(booleanGlobalUnexpectedValueError(name, inlineValue));
     }
     globals[name] = true;
     return index;
   }
   if (VALUE_GLOBALS.has(name)) {
-    const [value, nextIndex] = takeOptionValue(argv, index, inlineValue, name);
+    const [value, nextIndex] = takeGlobalOptionValue(argv, index, inlineValue, name);
     globals[toCamel(name)] = value;
     return nextIndex;
   }
   if (SPECIFIC_ACTION_FLAGS.has(name)) {
     const [action, field] = SPECIFIC_ACTION_FLAGS.get(name);
-    const [value, nextIndex] = takeOptionValue(argv, index, inlineValue, name);
+    const [value, nextIndex] = takeActionOverrideValue(argv, index, inlineValue, name);
     if (field === "effort") {
       validateEffort(value);
     }
@@ -136,7 +350,7 @@ function parseGlobal(argv, index, globals) {
     return nextIndex;
   }
   if (name === "action-model" || name === "action-effort") {
-    const [value, nextIndex] = takeOptionValue(argv, index, inlineValue, name);
+    const [value, nextIndex] = takeActionOverrideValue(argv, index, inlineValue, name);
     const field = name === "action-model" ? "model" : "effort";
     const [action, parsedValue] = parseGenericActionValue(value, name);
     if (field === "effort") {
@@ -177,10 +391,10 @@ function normalizeGlobals(globals) {
   delete globals["require-plan-approval"];
   delete globals["no-plan-approval"];
   if (globals.requirePlanApproval && globals.noPlanApproval) {
-    throw new ParseError("--require-plan-approval cannot be used with --no-plan-approval");
+    throw new ParseError(planApprovalConflictError());
   }
   if (globals.requirementsWorkflow && !["legacy", "spec"].includes(globals.requirementsWorkflow)) {
-    throw new ParseError("invalid --requirements-workflow value: expected legacy or spec");
+    throw new ParseError(requirementsWorkflowInvalidError(globals.requirementsWorkflow));
   }
   globals.actionOverrides.sort((left, right) => left.argvIndex - right.argvIndex);
   return globals;
@@ -202,25 +416,27 @@ function parseCommandArgs(command, args) {
       continue;
     }
     if (["spec", "plan"].includes(command) && ["file", "discover", "resume", "single-agent"].includes(optionName(token))) {
-      index = parsePhaseOption(result, args, index);
+      index = parsePhaseOption(command, result, args, index);
       continue;
     }
     if (command === "tasks" && ["file", "resume", "single-agent"].includes(optionName(token))) {
-      index = parsePhaseOption(result, args, index);
+      index = parsePhaseOption(command, result, args, index);
       continue;
     }
     if (command === "reset" && optionName(token) === "wave-lock") {
+      rejectInlineValue(command, optionName(token), splitOption(token)[1]);
       result.waveLock = true;
       continue;
     }
     if (command === "init" && optionName(token) === "force") {
       if (splitOption(token)[1] !== undefined) {
-        throw new ParseError("unexpected value for --force");
+        rejectInlineValue(command, optionName(token), splitOption(token)[1]);
       }
       result.force = true;
       continue;
     }
     if (command === "resume" && optionName(token) === "dry-run") {
+      rejectInlineValue(command, optionName(token), splitOption(token)[1]);
       result.dryRun = true;
       continue;
     }
@@ -229,6 +445,7 @@ function parseCommandArgs(command, args) {
       continue;
     }
     if (command === "verify" && ["resume", "manual"].includes(optionName(token))) {
+      rejectInlineValue(command, optionName(token), splitOption(token)[1]);
       result[toCamel(optionName(token))] = true;
       continue;
     }
@@ -237,13 +454,13 @@ function parseCommandArgs(command, args) {
       continue;
     }
     if (isImplementCommand(command)) {
-      const implementFlagIndex = parseImplementFlag(result, args, index);
+      const implementFlagIndex = parseImplementFlag(result, args, index, command);
       if (implementFlagIndex !== null) {
         index = implementFlagIndex;
         continue;
       }
       if (["task", "file", "single-agent", "resume"].includes(optionName(token))) {
-        index = parseImplementCommandOption(result, args, index);
+        index = parseImplementCommandOption(command, result, args, index);
         continue;
       }
     }
@@ -274,15 +491,18 @@ function parseCommandArgs(command, args) {
       index = nextIndex;
       continue;
     }
-    throw new ParseError(`unexpected argument '${token}' for ${command}`);
+    throw new ParseError(commandUnexpectedArgumentError(command, token));
   }
   if (command === "completions") {
-    if (result.positional.length !== 1) {
-      throw new ParseError("missing shell for completions");
+    if (result.positional.length === 0) {
+      throw new ParseError(completionsMissingShellError());
+    }
+    if (result.positional.length > 1) {
+      throw new ParseError(completionsUnexpectedArgumentError(result.positional[1]));
     }
     const shell = result.positional[0];
     if (!COMPLETION_SHELLS.includes(shell)) {
-      throw new ParseError(`invalid value '${shell}' for completions shell; expected one of ${COMPLETION_SHELLS.join(", ")}`);
+      throw new ParseError(completionsInvalidShellError(shell));
     }
     result.shell = shell;
     result.positional = [];
@@ -408,24 +628,24 @@ function defaultImplementFlags() {
 
 function parseUnsignedInteger(raw, flag) {
   if (!/^\d+$/.test(raw)) {
-    throw new ParseError(`invalid --${flag} value '${raw}': expected a non-negative integer`);
+    throw new ParseError(commandInvalidValueError(flag, raw));
   }
   return Number.parseInt(raw, 10);
 }
 
 function parseSignedInteger(raw, flag) {
   if (!/^-?\d+$/.test(raw)) {
-    throw new ParseError(`invalid --${flag} value '${raw}': expected an integer`);
+    throw new ParseError(commandInvalidValueError(flag, raw));
   }
   return Number.parseInt(raw, 10);
 }
 
-function parseImplementFlag(result, args, index) {
+function parseImplementFlag(result, args, index, command = "implement") {
   const token = args[index];
   const [name, inlineValue] = splitOption(token);
   if (BOOLEAN_IMPLEMENT_FLAGS.has(name)) {
     if (inlineValue !== undefined) {
-      throw new ParseError(`unexpected value for --${name}`);
+      rejectInlineValue(command, name, inlineValue);
     }
     result.flags[toCamel(name)] = true;
     return index;
@@ -463,7 +683,7 @@ function parseStructuredUnsupportedArgs(command, args) {
     }
 
     const [name, inlineValue] = splitOption(token);
-    const implementFlagIndex = spec.implementFlags ? parseImplementFlag(result, args, index) : null;
+    const implementFlagIndex = spec.implementFlags ? parseImplementFlag(result, args, index, command) : null;
     if (implementFlagIndex !== null) {
       index = implementFlagIndex;
       continue;
@@ -487,22 +707,22 @@ function parseStructuredUnsupportedArgs(command, args) {
       continue;
     }
     if (name === "queue" && spec.allowQueue) {
-      rejectInlineValue(name, inlineValue);
+      rejectInlineValue(command, name, inlineValue);
       result.queue = true;
       continue;
     }
     if (name === "discover" && spec.allowDiscover) {
-      rejectInlineValue(name, inlineValue);
+      rejectInlineValue(command, name, inlineValue);
       result.discover = true;
       continue;
     }
     if (name === "resume" && spec.allowResume) {
-      rejectInlineValue(name, inlineValue);
+      rejectInlineValue(command, name, inlineValue);
       result.resume = true;
       continue;
     }
     if (name === "single-agent" && spec.allowSingleAgent) {
-      rejectInlineValue(name, inlineValue);
+      rejectInlineValue(command, name, inlineValue);
       result.singleAgent = true;
       continue;
     }
@@ -551,21 +771,21 @@ function setSingleValue(result, key, value, flag) {
   result[key] = value;
 }
 
-function rejectInlineValue(name, inlineValue) {
+function rejectInlineValue(command, name, inlineValue) {
   if (inlineValue !== undefined) {
-    throw new ParseError(`unexpected value for --${name}`);
+    throw new ParseError(commandBooleanUnexpectedValueError(command, name, inlineValue));
   }
 }
 
 function validateStructuredUnsupportedArgs(command, spec, result) {
   if (spec.requirePhases && !result.phases) {
-    throw new ParseError("missing value for --phases");
+    throw new ParseError(pipelineRequiredPhasesError(result));
   }
   if (!spec.allowTaskFileCombo && result.task !== undefined && result.file !== undefined) {
-    throw new ParseError("task and --file cannot be used together.");
+    throw new ParseError(configError("task and --file cannot be used together."));
   }
   if (result.resume && (result.task !== undefined || result.file !== undefined)) {
-    throw new ParseError("--resume cannot be combined with task or --file.");
+    throw new ParseError(configError("--resume cannot be combined with task or --file."));
   }
   if (spec.requireTaskUnlessResume && !result.resume && result.task === undefined && result.file === undefined) {
     throw new ParseError("Task is required. Provide task text or --file <path>.");
@@ -574,7 +794,7 @@ function validateStructuredUnsupportedArgs(command, spec, result) {
     throw new ParseError("Plan file is required. Provide at least one file path.");
   }
   if (spec.rejectModeWithTask && (result.task !== undefined || result.file !== undefined) && (result.flags.perTask || result.flags.wave)) {
-    throw new ParseError("--per-task and --wave cannot be combined with --task or --file.");
+    throw new ParseError(configError("--per-task and --wave cannot be combined with --task or --file."));
   }
   const shouldValidateFlags = spec.kind !== "pipeline" || String(result.phases).split(",").includes("implement");
   if (result.flags && shouldValidateFlags) {
@@ -584,29 +804,29 @@ function validateStructuredUnsupportedArgs(command, spec, result) {
 
 function validateImplementFlags(flags, { resume, allowPerTaskResume }) {
   if (flags.wave && flags.perTask) {
-    throw new ParseError("--wave and --per-task cannot be used together.");
+    throw new ParseError(configError("--wave and --per-task cannot be used together."));
   }
   if (resume && flags.perTask && !allowPerTaskResume) {
-    throw new ParseError("--per-task cannot be combined with --resume.");
+    throw new ParseError(configError("--per-task cannot be combined with --resume."));
   }
   if (flags.roundStep === 0) {
-    throw new ParseError("--round-step must be at least 1.");
+    throw new ParseError(configError("--round-step must be at least 1."));
   }
   if (flags.continueOnFail && flags.failFast) {
-    throw new ParseError("--continue-on-fail and --fail-fast cannot be used together.");
+    throw new ParseError(configError("--continue-on-fail and --fail-fast cannot be used together."));
   }
   if (flags.maxParallel === 0) {
-    throw new ParseError("--max-parallel must be at least 1.");
+    throw new ParseError(configError("--max-parallel must be at least 1."));
   }
 }
 
 function validatePositionals(command, positional) {
   if (!POSITIONAL_COMMANDS.has(command) && positional.length > 0) {
-    throw new ParseError(`unexpected argument '${positional[0]}' for ${command}`);
+    throw new ParseError(commandUnexpectedArgumentError(command, positional[0]));
   }
 }
 
-function parsePhaseOption(result, args, index) {
+function parsePhaseOption(command, result, args, index) {
   const token = args[index];
   const [name, inlineValue] = splitOption(token);
   if (name === "file") {
@@ -614,9 +834,7 @@ function parsePhaseOption(result, args, index) {
     result.file = value;
     return nextIndex;
   }
-  if (inlineValue !== undefined) {
-    throw new ParseError(`unexpected value for --${name}`);
-  }
+  rejectInlineValue(command, name, inlineValue);
   result[toCamel(name)] = true;
   return index;
 }
@@ -629,9 +847,7 @@ function parseDiscussOption(result, args, index) {
     result[name] = value;
     return nextIndex;
   }
-  if (inlineValue !== undefined) {
-    throw new ParseError(`unexpected value for --${name}`);
-  }
+  rejectInlineValue("discuss", name, inlineValue);
   result[toCamel(name)] = true;
   return index;
 }
@@ -644,7 +860,7 @@ function parseNextOption(result, args, index) {
   return nextIndex;
 }
 
-function parseImplementCommandOption(result, args, index) {
+function parseImplementCommandOption(command, result, args, index) {
   const token = args[index];
   const [name, inlineValue] = splitOption(token);
   if (name === "task" || name === "file") {
@@ -652,9 +868,7 @@ function parseImplementCommandOption(result, args, index) {
     setSingleValue(result, name, value, `--${name}`);
     return nextIndex;
   }
-  if (inlineValue !== undefined) {
-    throw new ParseError(`unexpected value for --${name}`);
-  }
+  rejectInlineValue(command, name, inlineValue);
   result[toCamel(name)] = true;
   return index;
 }
@@ -667,7 +881,7 @@ function parseChainOption(result, args, index) {
     setSingleValue(result, "command", value, "--command");
     return nextIndex;
   }
-  rejectInlineValue(name, inlineValue);
+  rejectInlineValue("chain", name, inlineValue);
   result.resume = true;
   return index;
 }
@@ -686,12 +900,12 @@ function parseGoalOption(result, args, index) {
     return nextIndex;
   }
   if (name === "run") {
-    rejectInlineValue(name, inlineValue);
+    rejectInlineValue("goal", name, inlineValue);
     result.run = true;
     return index;
   }
   if (name === "replace" || name === "discover" || name === "single-agent") {
-    rejectInlineValue(name, inlineValue);
+    rejectInlineValue("goal", name, inlineValue);
     result[toCamel(name)] = true;
     return index;
   }
@@ -724,7 +938,7 @@ function parseQueueOption(result, args, index) {
     return nextIndex;
   }
   if (name === "run") {
-    rejectInlineValue(name, inlineValue);
+    rejectInlineValue("queue", name, inlineValue);
     result.run = true;
     return index;
   }
@@ -734,7 +948,7 @@ function parseQueueOption(result, args, index) {
 function parseImplementFlagForGoal(result, args, index) {
   result.flags ??= defaultImplementFlags();
   const previousFlags = result.flags;
-  const nextIndex = parseImplementFlag(result, args, index);
+  const nextIndex = parseImplementFlag(result, args, index, "goal");
   if (nextIndex === null) {
     if (Object.keys(previousFlags).length === Object.keys(defaultImplementFlags()).length) {
       result.flags = previousFlags;
@@ -753,13 +967,11 @@ function parseReviewOption(result, args, index) {
     return nextIndex;
   }
   if (["base", "file", "plan"].includes(name)) {
-    const [value, nextIndex] = takeOptionValue(args, index, inlineValue, name);
+    const [value, nextIndex] = takeOptionValue(args, index, inlineValue, name, name === "file" ? "FILE" : undefined);
     setSingleValue(result, toCamel(name), value, `--${name}`);
     return nextIndex;
   }
-  if (inlineValue !== undefined) {
-    throw new ParseError(`unexpected value for --${name}`);
-  }
+  rejectInlineValue("review", name, inlineValue);
   result[toCamel(name)] = true;
   return index;
 }
@@ -804,7 +1016,7 @@ function validateQueueCommandArgs(result) {
   }
   const [queueCommand, ...rest] = result.positional;
   if (!QUEUE_COMMANDS.has(queueCommand)) {
-    throw new ParseError(`unknown queue subcommand '${queueCommand}'`);
+    throw new ParseError(unknownSubcommandError("queue", queueCommand));
   }
   result.queueCommand = queueCommand;
   result.positional = [];
@@ -857,23 +1069,23 @@ function rejectQueueAddOnlyOptions(result, queueCommand) {
 
 function validateImplementCommandArgs(result) {
   if (result.task !== undefined && result.file !== undefined) {
-    throw new ParseError("--task and --file cannot be used together.");
+    throw new ParseError(configError("--task and --file cannot be used together."));
   }
   if (result.resume && (result.task !== undefined || result.file !== undefined)) {
-    throw new ParseError("--resume cannot be combined with --task or --file.");
+    throw new ParseError(configError("--resume cannot be combined with --task or --file."));
   }
   if (result.flags.perTask && (result.task !== undefined || result.file !== undefined)) {
-    throw new ParseError("--per-task cannot be combined with --task or --file.");
+    throw new ParseError(configError("--per-task cannot be combined with --task or --file."));
   }
   if (result.flags.wave && (result.task !== undefined || result.file !== undefined)) {
-    throw new ParseError("--wave cannot be combined with --task or --file.");
+    throw new ParseError(configError("--wave cannot be combined with --task or --file."));
   }
   validateImplementFlags(result.flags, { resume: Boolean(result.resume), allowPerTaskResume: false });
 }
 
 function validateReviewCommandArgs(result) {
   if ((result.files ?? []).length > 0 && result.base !== undefined) {
-    throw new ParseError("--files and --base cannot be used together.");
+    throw new ParseError(configError("--files and --base cannot be used together."));
   }
   if (result.positional.length > 1) {
     throw new ParseError(`unexpected argument '${result.positional[1]}' for review`);
@@ -890,16 +1102,13 @@ function validateChainCommandArgs(result) {
 }
 
 function validateApprovalCommandArgs(command, result) {
-  if (result.positional.length === 0) {
-    throw new ParseError(`missing phase for ${command}`);
+  if (result.positional.length === 0 || (command === "reject" && !result.reason?.trim())) {
+    throw new ParseError(approvalRequiredArgumentsError(command, result));
   }
   if (result.positional.length > 1) {
-    throw new ParseError(`unexpected argument '${result.positional[1]}' for ${command}`);
+    throw new ParseError(commandUnexpectedArgumentError(command, result.positional[1]));
   }
   result.phase = result.positional[0];
-  if (command === "reject" && !result.reason?.trim()) {
-    throw new ParseError("--reason is required when rejecting a plan");
-  }
 }
 
 export function isJsonRequested(argv) {
@@ -920,6 +1129,16 @@ export function parseCliFrom(argv) {
       const token = argv[index];
       if (token === "-h" || token === "--help") {
         const jsonMode = Boolean(globals.json || argv.includes("--json"));
+        if (command !== null) {
+          const commandHelpText = formatCommandHelpText(command, { session: globals.session });
+          if (commandHelpText) {
+            return {
+              kind: "exit",
+              code: 0,
+              stdout: jsonMode ? `${JSON.stringify(commandHelpEvent(command, { session: globals.session }))}\n` : commandHelpText,
+            };
+          }
+        }
         return {
           kind: "exit",
           code: 0,
@@ -943,12 +1162,26 @@ export function parseCliFrom(argv) {
         command = token;
         continue;
       }
+      if (command === null && token.startsWith("-")) {
+        throw new ParseError(unexpectedGlobalArgumentError(token));
+      }
       commandArgs.push(token);
     }
 
     normalizeGlobals(globals);
 
     if (command === "help") {
+      const helpCommand = commandArgs[0];
+      if (helpCommand) {
+        const commandHelpText = formatCommandHelpText(helpCommand, { session: globals.session });
+        if (commandHelpText) {
+          return {
+            kind: "exit",
+            code: 0,
+            stdout: globals.json ? `${JSON.stringify(commandHelpEvent(helpCommand, { session: globals.session }))}\n` : commandHelpText,
+          };
+        }
+      }
       return {
         kind: "exit",
         code: 0,
@@ -957,7 +1190,7 @@ export function parseCliFrom(argv) {
     }
 
     if (command !== null && !SUPPORTED_COMMANDS.has(command) && !UNSUPPORTED_COMMAND_SET.has(command)) {
-      throw new ParseError(`unknown command '${command}'`);
+      throw new ParseError(unknownCommandError(command));
     }
 
     const commandArgsForDispatch =

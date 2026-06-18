@@ -8,6 +8,15 @@ import { loadConfig } from "../src/config/index.js";
 
 const migrateScriptPath = resolve(dirname(fileURLToPath(import.meta.url)), "../scripts/migrate-config.js");
 
+function captureStderr() {
+  return {
+    text: "",
+    write(chunk) {
+      this.text += String(chunk);
+    },
+  };
+}
+
 test("project .agent-loop.json loads and resolves role providers", async () => {
   const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
   await writeFile(resolve(project, ".agent-loop.json"), JSON.stringify({
@@ -444,20 +453,25 @@ test(".agent-loop.json with a UTF-8 BOM still parses", async () => {
 test("legacy .agent-loop.toml without JSON config warns with the migrate hint", async () => {
   const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
   await writeFile(resolve(project, ".agent-loop.toml"), "implementer = \"codex\"\n");
-  const config = await loadConfig(project, { globals: {}, commandArgs: {} }, { env: {} });
+  const stderr = captureStderr();
+  const config = await loadConfig(project, { globals: {}, commandArgs: {} }, { env: {}, stderr });
   assert.equal(config.roles.implementer, "claude");
   assert.ok(config.warnings.includes(
     `found .agent-loop.toml, but the Node CLI now reads .agent-loop.json; run 'node "${migrateScriptPath}" "${project}"' to convert it.`,
   ));
+  assert.match(stderr.text, /^warning: found \.agent-loop\.toml, but the Node CLI now reads \.agent-loop\.json/m);
+  assert.match(stderr.text, /migrate-config\.js/);
 });
 
 test("when both config files exist JSON wins and the TOML is reported as ignored", async () => {
   const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
   await writeFile(resolve(project, ".agent-loop.toml"), "implementer = \"codex\"\n");
   await writeFile(resolve(project, ".agent-loop.json"), JSON.stringify({ implementer: "qwen/qwen3-coder-plus" }));
-  const config = await loadConfig(project, { globals: {}, commandArgs: {} }, { env: {} });
+  const stderr = captureStderr();
+  const config = await loadConfig(project, { globals: {}, commandArgs: {} }, { env: {}, stderr });
   assert.equal(config.roles.implementer, "qwen");
   assert.ok(config.warnings.includes(
     ".agent-loop.toml is ignored by the Node CLI; .agent-loop.json takes precedence.",
   ));
+  assert.match(stderr.text, /^warning: \.agent-loop\.toml is ignored by the Node CLI; \.agent-loop\.json takes precedence\./m);
 });

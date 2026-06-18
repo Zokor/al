@@ -2,8 +2,9 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { loadConfig } from "../../config/index.js";
 import { readStateFile } from "../../state/files.js";
-import { clearGoal, createGoal, GoalStatus, readGoal, setGoalStatus } from "../../state/goal.js";
+import { clearGoal, completeGoalIfCurrent, createGoal, GoalStatus, readGoal, setGoalStatus } from "../../state/goal.js";
 import { handleUnsupportedCommand } from "../../unsupported/handler.js";
+import { runResume } from "./resume.js";
 
 const DEFAULT_IMPLEMENT_FLAGS = Object.freeze({
   perTask: false,
@@ -28,7 +29,7 @@ export async function runGoal(cli, context) {
     case "pause":
       return pauseGoal(config, context);
     case "resume":
-      return resumeGoal(config, context, { run: cli.commandArgs.run });
+      return resumeGoal(config, context, cli, { run: cli.commandArgs.run });
     case "clear":
       return clearActiveGoal(config, context);
     default:
@@ -78,7 +79,7 @@ async function pauseGoal(config, context) {
   return 0;
 }
 
-async function resumeGoal(config, context, { run = false } = {}) {
+async function resumeGoal(config, context, cli, { run = false } = {}) {
   const goal = await setGoalStatus(config, GoalStatus.Active);
   if (!goal) {
     if (!config.jsonMode) {
@@ -90,7 +91,11 @@ async function resumeGoal(config, context, { run = false } = {}) {
     context.stdout.write(`Goal active: "${goal.objective}"\n`);
   }
   if (run) {
-    return handleUnsupportedCommand("goal resume --run", context);
+    const code = await runResume({ ...cli, command: "resume", commandArgs: { dryRun: false } }, context);
+    if (code === 0) {
+      await completeGoalIfCurrent(config, goal.goal_id);
+    }
+    return code;
   }
   return 0;
 }

@@ -9,7 +9,7 @@ test("parity smoke output normalization removes elapsed lines and canonicalizes 
   ].join("\n");
   const node = [
     '{"type":"goal_status","data":{"goal":null,"workflow":{"status":"PENDING","timestamp":"2026-06-17T11:00:01.000Z"}}}',
-    "elapsed: 0.00s",
+    "Elapsed: 00:00:00",
   ].join("\n");
 
   assert.equal(normalizeOutput(rust), normalizeOutput(node));
@@ -28,6 +28,20 @@ test("parity smoke state normalization sorts keys and scrubs dynamic timestamps"
   });
 
   assert.equal(normalizeJsonContent(rust), normalizeJsonContent(node));
+});
+
+test("parity smoke supports scenario-local dynamic ID normalization", () => {
+  const rust = '{"type":"queue_item","data":{"queue_id":"rust-id","title":"Ship"}}';
+  const node = '{"data":{"title":"Ship","queue_id":"node-id"},"type":"queue_item"}';
+
+  assert.equal(
+    normalizeOutput(rust, { dynamicJsonKeys: ["queue_id"] }),
+    normalizeOutput(node, { dynamicJsonKeys: ["queue_id"] }),
+  );
+  assert.equal(
+    normalizeOutput("Queued abc12345: Ship\n", { outputReplacements: [[/Queued [0-9a-f]{8}:/g, "Queued <queue-id>:"]] }),
+    "Queued <queue-id>: Ship",
+  );
 });
 
 test("parity smoke rejects unknown scenario names before running CLIs", async () => {

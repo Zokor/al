@@ -510,6 +510,12 @@ b, strong { font-weight: 700; color: var(--ink); }
 .mini-flow { display: flex; flex-wrap: wrap; align-items: center; gap: 0.3rem; }
 .mini-node { background: #fff; border: 1.5px solid var(--line); border-radius: 8px; padding: 0.22em 0.5em; font-size: clamp(0.68rem, 1.15vw, 0.9rem); font-weight: 600; color: var(--ink); display: inline-flex; align-items: center; gap: 0.3em; }
 .mini-arrow { color: var(--ink-dim); font-weight: 700; font-size: 0.85em; }
+
+/* On short, wide screens (landscape phones) keep grids in more columns to save vertical height */
+@media (max-height: 500px) and (min-width: 600px) {
+    .cards--3 { grid-template-columns: repeat(3, 1fr); }
+    .cards--4 { grid-template-columns: repeat(4, 1fr); }
+}
 </style>
 </head>
 <body>
@@ -579,6 +585,42 @@ b, strong { font-weight: 700; color: var(--ink); }
         </div>
     </div>
     <span class="slide-number">02 / 18</span>
+</section>
+
+<!-- ==================== HOW IT WORKS · TALKS TO YOUR CLI TOOLS ==================== -->
+<section class="slide" id="slide-how">
+    <div class="orb orb--primary" style="bottom:-12%; left:4%;"></div>
+    <div class="slide-content">
+        <span class="kicker reveal">How it works</span>
+        <h2 class="reveal reveal-delay-1">It conducts the AI tools you already have</h2>
+        <p class="lead reveal reveal-delay-2">
+            Agent Loop doesn't write code itself — it's the <b>conductor</b>. The real work is done by the
+            AI command-line tools already on your machine; Agent Loop <b>talks to each one</b> — hands over a task, then collects the result.
+        </p>
+        <div class="diagram reveal reveal-delay-2" style="display:flex; flex-direction:column; align-items:center; gap: clamp(0.3rem,1vh,0.55rem); width:100%;">
+            <span class="node node--purple"><span class="emoji">🧑‍💼</span> Agent Loop <span class="note" style="font-weight:600;">— the conductor</span></span>
+            <span class="note" style="font-weight:700; color:var(--primary);">⇅&nbsp; hands over a task · collects the result &nbsp;⇅</span>
+            <div class="workspace-bar">
+                <span class="ws-title">🛠️ The AI command-line tools you already have</span>
+                <div class="ws-docs">
+                    <span class="tag-ai">Claude</span>
+                    <span class="tag-ai">Codex</span>
+                    <span class="tag-ai exp">Copilot</span>
+                    <span class="tag-ai exp">Cursor</span>
+                    <span class="tag-ai exp">+ more</span>
+                </div>
+            </div>
+        </div>
+        <div class="cards cards--3 reveal reveal-delay-3">
+            <div class="f-card"><h3>🔌 Nothing new to buy</h3><p>It uses the AI tools &amp; accounts you've already set up.</p></div>
+            <div class="f-card"><h3>🔒 Your code stays put</h3><p>Everything runs locally, inside your own project folder.</p></div>
+            <div class="f-card"><h3>🔄 Swap any time</h3><p>Choose which tool does which job — and plug in new ones later.</p></div>
+        </div>
+        <p class="note center fill reveal reveal-delay-4" style="margin-top: var(--element-gap);">
+            🎼 Like a conductor and an orchestra — it doesn't play the instruments, it coordinates the musicians (your AI tools) you already have.
+        </p>
+    </div>
+    <span class="slide-number">03 / 20</span>
 </section>
 
 <!-- ==================== 03 · WHY IT EXISTS ==================== -->
@@ -961,28 +1003,6 @@ b, strong { font-weight: 700; color: var(--ink); }
         </div>
     </div>
     <span class="slide-number">15 / 18</span>
-</section>
-
-<!-- ==================== 16 · UNDER THE HOOD ==================== -->
-<section class="slide" id="slide-16">
-    <div class="slide-content">
-        <span class="kicker reveal">Under the hood</span>
-        <h2 class="reveal reveal-delay-1">How it actually runs the AIs (the simple version)</h2>
-        <div class="diagram row center-x reveal reveal-delay-2" style="gap: clamp(0.4rem,1.2vw,0.9rem); margin: 0.2rem 0;">
-            <span class="node node--purple"><span class="emoji">🧑‍💼</span> Agent Loop <span class="note" style="font-weight:600;">(the manager)</span></span>
-            <span class="arrow">&rarr; gives a task &rarr;</span>
-            <span class="node node--primary"><span class="emoji">🤖</span> An AI assistant</span>
-            <span class="arrow">&rarr; returns the work &rarr;</span>
-            <span class="node node--green"><span class="emoji">📦</span> Next step</span>
-        </div>
-        <div class="cards cards--2 reveal reveal-delay-3">
-            <div class="f-card"><h3>🔒 Stays on your machine</h3><p>It runs right inside your project folder. Your code never leaves.</p></div>
-            <div class="f-card"><h3>🔌 Uses tools you already have</h3><p>No new accounts to set up — it drives the AI tools already installed.</p></div>
-            <div class="f-card"><h3>🧱 Easy to extend</h3><p>Want to add a new AI later? It just plugs in — nothing else changes.</p></div>
-            <div class="f-card"><h3>🧑‍💼 Always supervised</h3><p>The manager hands out work and collects results — like a foreman with a crew.</p></div>
-        </div>
-    </div>
-    <span class="slide-number">16 / 18</span>
 </section>
 
 <!-- ==================== 17 · SETTINGS ==================== -->

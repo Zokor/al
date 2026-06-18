@@ -7,7 +7,7 @@ import test from "node:test";
 import { promisify } from "node:util";
 import { validateCompletionInvariants } from "../src/app/commands/verify.js";
 import { DiscoveryPhase, shouldRunDiscoveryPrepass } from "../src/app/discoveryPrepass.js";
-import { runMain } from "../src/main.js";
+import { formatElapsedText, runMain } from "../src/main.js";
 import { captureStream } from "./helpers.js";
 
 const execFileAsync = promisify(execFile);
@@ -33,11 +33,553 @@ async function git(cwd, args) {
   return result.stdout.trim();
 }
 
+test("outer elapsed formatter uses Rust-shaped HH:MM:SS text", () => {
+  assert.equal(formatElapsedText(0), "Elapsed: 00:00:00\n");
+  assert.equal(formatElapsedText(999), "Elapsed: 00:00:00\n");
+  assert.equal(formatElapsedText(3_661_000), "Elapsed: 01:01:01\n");
+});
+
+test("plain outer elapsed output uses Rust-shaped text", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const status = await run(["status"], project);
+  assert.equal(status.code, 0);
+  assert.equal(status.stdout, "not initialized\nElapsed: 00:00:00\n");
+  assert.equal(status.stderr, "");
+});
+
+test("unknown leading global options use Rust config-error formatting", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const result = await run(["--wat"], project);
+  assert.equal(result.code, 1);
+  assert.equal(result.stdout, "");
+  assert.equal(
+    result.stderr,
+    "Config error: error: unexpected argument '--wat' found\n\nUsage: agent-loop [OPTIONS] [COMMAND]\n\nFor more information, try '--help'.\n",
+  );
+  assert.doesNotMatch(result.stderr, /Commands:/);
+});
+
+test("command parser validation errors use Rust config-error stderr", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+
+  const unknownJson = await run(["--json", "wat"], project);
+  assert.equal(unknownJson.code, 1);
+  assert.equal(unknownJson.stdout, "");
+  assert.equal(
+    unknownJson.stderr,
+    "Config error: error: unrecognized subcommand 'wat'\n\nUsage: agent-loop [OPTIONS] [COMMAND]\n\nFor more information, try '--help'.\n",
+  );
+
+  const statusExtraJson = await run(["--json", "status", "extra"], project);
+  assert.equal(statusExtraJson.code, 1);
+  assert.equal(statusExtraJson.stdout, "");
+  assert.equal(
+    statusExtraJson.stderr,
+    "Config error: error: unexpected argument 'extra' found\n\nUsage: agent-loop status [OPTIONS]\n\nFor more information, try '--help'.\n",
+  );
+});
+
+test("required command argument errors use Rust config-error stderr", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+
+  const missingApprovePhase = await run(["--json", "approve"], project);
+  assert.equal(missingApprovePhase.code, 1);
+  assert.equal(missingApprovePhase.stdout, "");
+  assert.equal(
+    missingApprovePhase.stderr,
+    "Config error: error: the following required arguments were not provided:\n  <PHASE>\n\nUsage: agent-loop approve <PHASE>\n\nFor more information, try '--help'.\n",
+  );
+
+  const missingRejectReason = await run(["reject", "plan"], project);
+  assert.equal(missingRejectReason.code, 1);
+  assert.equal(missingRejectReason.stdout, "");
+  assert.equal(
+    missingRejectReason.stderr,
+    "Config error: error: the following required arguments were not provided:\n  --reason <REASON>\n\nUsage: agent-loop reject --reason <REASON> <PHASE>\n\nFor more information, try '--help'.\n",
+  );
+
+  const missingPipelinePhases = await run(["--json", "pipeline", "--task", "ship it"], project);
+  assert.equal(missingPipelinePhases.code, 1);
+  assert.equal(missingPipelinePhases.stdout, "");
+  assert.equal(
+    missingPipelinePhases.stderr,
+    "Config error: error: the following required arguments were not provided:\n  --phases <PHASES>\n\nUsage: agent-loop pipeline --phases <PHASES> --task <TASK>\n\nFor more information, try '--help'.\n",
+  );
+});
+
+test("command boolean inline value errors use Rust config-error stderr", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+
+  const initForce = await run(["--json", "init", "--force=true"], project);
+  assert.equal(initForce.code, 1);
+  assert.equal(initForce.stdout, "");
+  assert.equal(
+    initForce.stderr,
+    "Config error: error: unexpected value 'true' for '--force' found; no more were expected\n\nUsage: agent-loop init --force\n\nFor more information, try '--help'.\n",
+  );
+
+  const resumeDryRun = await run(["resume", "--dry-run=true"], project);
+  assert.equal(resumeDryRun.code, 1);
+  assert.equal(resumeDryRun.stdout, "");
+  assert.equal(
+    resumeDryRun.stderr,
+    "Config error: error: unexpected value 'true' for '--dry-run' found; no more were expected\n\nUsage: agent-loop resume --dry-run\n\nFor more information, try '--help'.\n",
+  );
+
+  const verifyManual = await run(["verify", "--manual=true"], project);
+  assert.equal(verifyManual.code, 1);
+  assert.equal(verifyManual.stdout, "");
+  assert.equal(
+    verifyManual.stderr,
+    "Config error: error: unexpected value 'true' for '--manual' found; no more were expected\n\nUsage: agent-loop verify --manual\n\nFor more information, try '--help'.\n",
+  );
+});
+
+test("command semantic conflict errors use Rust config-error stderr", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+
+  const taskFile = await run(["--json", "implement", "--task", "a", "--file", "b.md"], project);
+  assert.equal(taskFile.code, 1);
+  assert.equal(taskFile.stdout, "");
+  assert.equal(taskFile.stderr, "Config error: --task and --file cannot be used together.\n");
+
+  const wavePerTask = await run(["implement", "--wave", "--per-task"], project);
+  assert.equal(wavePerTask.code, 1);
+  assert.equal(wavePerTask.stdout, "");
+  assert.equal(wavePerTask.stderr, "Config error: --wave and --per-task cannot be used together.\n");
+
+  const reviewFilesBase = await run(["review", "--files", "a.js", "--base", "main"], project);
+  assert.equal(reviewFilesBase.code, 1);
+  assert.equal(reviewFilesBase.stdout, "");
+  assert.equal(reviewFilesBase.stderr, "Config error: --files and --base cannot be used together.\n");
+});
+
+test("numeric command option validation errors use Rust config-error stderr", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+
+  const maxRetries = await run(["--json", "implement", "--max-retries", "abc"], project);
+  assert.equal(maxRetries.code, 1);
+  assert.equal(maxRetries.stdout, "");
+  assert.equal(
+    maxRetries.stderr,
+    "Config error: error: invalid value 'abc' for '--max-retries <MAX_RETRIES>': invalid digit found in string\n\nFor more information, try '--help'.\n",
+  );
+
+  const roundStepZero = await run(["implement", "--round-step", "0"], project);
+  assert.equal(roundStepZero.code, 1);
+  assert.equal(roundStepZero.stdout, "");
+  assert.equal(roundStepZero.stderr, "Config error: --round-step must be at least 1.\n");
+
+  const queuePriority = await run(["queue", "add", "--priority", "abc", "task"], project);
+  assert.equal(queuePriority.code, 1);
+  assert.equal(queuePriority.stdout, "");
+  assert.equal(
+    queuePriority.stderr,
+    "Config error: error: invalid value 'abc' for '--priority <PRIORITY>': invalid digit found in string\n\nFor more information, try '--help'.\n",
+  );
+});
+
+test("global option validation errors use Rust config-error formatting", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+
+  const invalidWorkflow = await run(["--json", "--requirements-workflow", "bogus", "status"], project);
+  assert.equal(invalidWorkflow.code, 1);
+  assert.equal(invalidWorkflow.stdout, "");
+  assert.equal(
+    invalidWorkflow.stderr,
+    "Config error: error: invalid value 'bogus' for '--requirements-workflow <MODE>'\n  [possible values: legacy, spec]\n\nFor more information, try '--help'.\n",
+  );
+
+  const approvalConflict = await run(["--require-plan-approval", "--no-plan-approval", "status"], project);
+  assert.equal(approvalConflict.code, 1);
+  assert.equal(approvalConflict.stdout, "");
+  assert.equal(
+    approvalConflict.stderr,
+    "Config error: error: the argument '--require-plan-approval' cannot be used with '--no-plan-approval'\n\nUsage: agent-loop [OPTIONS] [COMMAND]\n\nFor more information, try '--help'.\n",
+  );
+});
+
+test("action override validation errors use Rust config-error stderr", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+
+  const invalidJsonEffort = await run(["--json", "--plan-effort", "wild", "status"], project);
+  assert.equal(invalidJsonEffort.code, 1);
+  assert.equal(invalidJsonEffort.stdout, "");
+  assert.equal(
+    invalidJsonEffort.stderr,
+    "Config error: unknown effort level 'wild': expected one of minimal, low, medium, high, max, xhigh\n",
+  );
+
+  const invalidActionModel = await run(["--action-model", "plan", "status"], project);
+  assert.equal(invalidActionModel.code, 1);
+  assert.equal(invalidActionModel.stdout, "");
+  assert.equal(
+    invalidActionModel.stderr,
+    "Config error: invalid --action-model value 'plan': expected ACTION=MODEL\n",
+  );
+});
+
 test("status reports uninitialized without status.json", async () => {
   const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
   const result = await run(["status", "--json"], project);
   assert.equal(result.code, 0);
   assert.equal(result.stdout.trim(), JSON.stringify({ type: "status", data: { initialized: false } }));
+});
+
+test("default help uses Rust-shaped sections and session-aware state paths", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const plain = await run([], project);
+  assert.equal(plain.code, 0);
+  assert.match(plain.stdout, /^Run a collaborative implementation\/review loop between coding agents\./);
+  assert.match(plain.stdout, /Commands:\n  spec\s+Author or resume a requirements spec/);
+  assert.match(plain.stdout, /Primary commands:\n  agent-loop spec <task>/);
+  assert.match(plain.stdout, /agent-loop goal "task"\s+Persist and run an autonomous lifecycle goal/);
+  assert.match(plain.stdout, /Configuration sources[\s\S]*\.agent-loop\.json/);
+  assert.match(plain.stdout, /TRANSCRIPT_ENABLED\s+\(default: 0\).*\.agent-loop\/state\/transcript\.log/);
+
+  const session = await run(["--session", "demo"], project);
+  assert.equal(session.code, 0);
+  assert.match(session.stdout, /agent-loop reset\s+Clear \.agent-loop\/state\/demo\/ and preserve decisions\.md/);
+  assert.match(session.stdout, /\.agent-loop\/state\/demo\/transcript\.log/);
+});
+
+test("status help uses Rust-shaped command-specific help", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+
+  const flag = await run(["status", "--help"], project);
+  assert.equal(flag.code, 0);
+  assert.match(flag.stdout, /^Show current loop status\n\nUsage: agent-loop status \[OPTIONS\]\n\nOptions:/);
+  assert.match(flag.stdout, /Primary commands:\n  agent-loop spec <task>/);
+  assert.match(flag.stdout, /Per-project config: place \.agent-loop\.json/);
+  assert.match(flag.stdout, /Elapsed: 00:00:00\n$/);
+  assert.equal(flag.stderr, "");
+
+  const command = await run(["help", "status"], project);
+  assert.equal(command.code, 0);
+  assert.match(command.stdout, /^Show current loop status\n\nUsage: agent-loop status \[OPTIONS\]/);
+
+  const json = await run(["--json", "status", "--help"], project);
+  assert.equal(json.code, 0);
+  assert.equal(json.stderr, "");
+  const event = JSON.parse(json.stdout);
+  assert.equal(event.type, "help");
+  assert.match(event.data.text, /^Show current loop status\n\nUsage: agent-loop status \[OPTIONS\]/);
+});
+
+test("low-runtime command help uses Rust-shaped command-specific help", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+
+  const reset = await run(["reset", "--help"], project);
+  assert.equal(reset.code, 0);
+  assert.match(reset.stdout, /^Clear \.agent-loop\/state while preserving decisions\.md\n\nUsage: agent-loop reset \[OPTIONS\]\n\nOptions:/);
+  assert.match(reset.stdout, /--wave-lock\s+Only remove the wave\.lock file/);
+  assert.match(reset.stdout, /Primary commands:\n  agent-loop spec <task>/);
+  assert.match(reset.stdout, /Elapsed: 00:00:00\n$/);
+  assert.equal(reset.stderr, "");
+
+  const init = await run(["help", "init"], project);
+  assert.equal(init.code, 0);
+  assert.match(init.stdout, /^Initialize project configuration\n\nUsage: agent-loop init \[OPTIONS\]\n\nOptions:/);
+  assert.match(init.stdout, /--force\s+Overwrite existing \.agent-loop\.json/);
+  assert.match(init.stdout, /agent-loop init\s+Generate default \.agent-loop\.json/);
+
+  const completions = await run(["--json", "help", "completions"], project);
+  assert.equal(completions.code, 0);
+  assert.equal(completions.stderr, "");
+  const event = JSON.parse(completions.stdout);
+  assert.equal(event.type, "help");
+  assert.match(event.data.text, /^Generate a shell completion script/);
+  assert.match(event.data.text, /Arguments:\n  <SHELL>/);
+  assert.match(event.data.text, /possible values: bash, elvish, fish, powershell, zsh/);
+});
+
+test("tui help uses Rust-shaped command-specific help while runtime stays unsupported", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+
+  const plain = await run(["tui", "--help"], project);
+  assert.equal(plain.code, 0);
+  assert.equal(plain.stderr, "");
+  assert.match(plain.stdout, /^Launch the TUI dashboard to monitor agent-loop state\n\nUsage: agent-loop tui \[OPTIONS\] \[PATH\]\.\.\./);
+  assert.match(plain.stdout, /Arguments:\n  \[PATH\]\.\.\.\s+Paths to project directories to monitor \(defaults to current directory\)/);
+  assert.match(plain.stdout, /Options:\n      --session <NAME>\n      --new-context/);
+  assert.match(plain.stdout, /Primary commands:\n  agent-loop spec <task>/);
+  assert.match(plain.stdout, /Elapsed: 00:00:00\n$/);
+
+  const json = await run(["--json", "help", "tui"], project);
+  assert.equal(json.code, 0);
+  assert.equal(json.stderr, "");
+  const event = JSON.parse(json.stdout);
+  assert.equal(event.type, "help");
+  assert.match(event.data.text, /^Launch the TUI dashboard to monitor agent-loop state/);
+  assert.match(event.data.text, /Usage: agent-loop tui \[OPTIONS\] \[PATH\]\.\.\./);
+
+  const runtime = await run(["tui"], project);
+  assert.equal(runtime.code, 2);
+  assert.match(runtime.stderr, /Unsupported in node-cli first pass: tui/);
+});
+
+test("lifecycle and control command help uses Rust-shaped command-specific help", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+
+  const goal = await run(["goal", "--help"], project);
+  assert.equal(goal.code, 0);
+  assert.match(goal.stdout, /^Persist and run an autonomous goal lifecycle\n\nUsage: agent-loop goal \[OPTIONS\] \[OBJECTIVE\]\.\.\. \[COMMAND\]/);
+  assert.match(goal.stdout, /Commands:\n  status\s+Print goal and workflow status/);
+  assert.match(goal.stdout, /--objective <TEXT>\s+Task objective text/);
+  assert.match(goal.stdout, /--max-retries <MAX_RETRIES>\s+\[default: 2\]/);
+  assert.match(goal.stdout, /Elapsed: 00:00:00\n$/);
+  assert.equal(goal.stderr, "");
+
+  const queue = await run(["help", "queue"], project);
+  assert.equal(queue.code, 0);
+  assert.match(queue.stdout, /^Manage queued autonomous objectives\n\nUsage: agent-loop queue \[OPTIONS\] <COMMAND>/);
+  assert.match(queue.stdout, /Commands:\n  add\s+Add a queued objective/);
+  assert.match(queue.stdout, /resume\s+Return a deferred or blocked queue item to the runnable queue/);
+
+  const approve = await run(["approve", "--help"], project);
+  assert.equal(approve.code, 0);
+  assert.match(approve.stdout, /^Approve a pending phase approval gate\n\nUsage: agent-loop approve \[OPTIONS\] <PHASE>/);
+  assert.match(approve.stdout, /Arguments:\n  <PHASE>\s+Phase to approve\. Currently supported: plan/);
+
+  const reject = await run(["--json", "help", "reject"], project);
+  assert.equal(reject.code, 0);
+  assert.equal(reject.stderr, "");
+  const event = JSON.parse(reject.stdout);
+  assert.equal(event.type, "help");
+  assert.match(event.data.text, /^Reject a pending phase approval gate/);
+  assert.match(event.data.text, /Usage: agent-loop reject \[OPTIONS\] --reason <REASON> <PHASE>/);
+  assert.match(event.data.text, /--reason <REASON>\s+Required rejection reason/);
+});
+
+test("read-only and routing command help uses Rust-shaped command-specific help", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+
+  const analyze = await run(["analyze-coverage", "--help"], project);
+  assert.equal(analyze.code, 0);
+  assert.match(analyze.stdout, /^Check spec requirement IDs against tasks\.md\n\nUsage: agent-loop analyze-coverage \[OPTIONS\]\n\nOptions:/);
+  assert.match(analyze.stdout, /Primary commands:\n  agent-loop spec <task>/);
+  assert.match(analyze.stdout, /Elapsed: 00:00:00\n$/);
+  assert.equal(analyze.stderr, "");
+
+  const next = await run(["help", "next"], project);
+  assert.equal(next.code, 0);
+  assert.match(next.stdout, /^Determine and run the logical next command based on current state\n\nUsage: agent-loop next \[OPTIONS\]/);
+  assert.match(next.stdout, /--task <TASK>\s+Task description text \(for fresh start\)/);
+  assert.match(next.stdout, /--file <FILE>\s+Path to a task file \(for fresh start\)/);
+
+  const resume = await run(["resume", "--help"], project);
+  assert.equal(resume.code, 0);
+  assert.match(resume.stdout, /^Resume the current run and choose the right underlying workflow automatically\n\nUsage: agent-loop resume \[OPTIONS\]/);
+  assert.match(resume.stdout, /--dry-run\s+Print the selected resume command without running it/);
+
+  const listAgents = await run(["list-agents", "--help"], project);
+  assert.equal(listAgents.code, 0);
+  assert.match(listAgents.stdout, /^List available agents and their installation status \(JSON output\)\n\nUsage: agent-loop list-agents \[OPTIONS\]/);
+
+  const version = await run(["--json", "help", "version"], project);
+  assert.equal(version.code, 0);
+  assert.equal(version.stderr, "");
+  const event = JSON.parse(version.stdout);
+  assert.equal(event.type, "help");
+  assert.match(event.data.text, /^Print version\n\nUsage: agent-loop version \[OPTIONS\]/);
+});
+
+test("phase command help uses Rust-shaped command-specific help", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+
+  const spec = await run(["spec", "--help"], project);
+  assert.equal(spec.code, 0);
+  assert.match(spec.stdout, /^Author or resume a requirements spec\n\nUsage: agent-loop spec \[OPTIONS\] \[TASK\]/);
+  assert.match(spec.stdout, /Arguments:\n  \[TASK\]\n/);
+  assert.match(spec.stdout, /Options:\n      --file <PATH>\n      --session <NAME>\n      --discover\n/);
+  assert.match(spec.stdout, /Primary commands:\n  agent-loop spec <task>/);
+  assert.match(spec.stdout, /Elapsed: 00:00:00\n$/);
+  assert.equal(spec.stderr, "");
+
+  const plan = await run(["help", "plan"], project);
+  assert.equal(plan.code, 0);
+  assert.match(plan.stdout, /^Plan only\n\nUsage: agent-loop plan \[OPTIONS\] \[TASK\]/);
+  assert.match(plan.stdout, /--resume\n      --require-plan-approval/);
+  assert.match(plan.stdout, /--single-agent\n      --no-plan-approval/);
+
+  const tasks = await run(["--json", "tasks", "--help"], project);
+  assert.equal(tasks.code, 0);
+  assert.equal(tasks.stderr, "");
+  const event = JSON.parse(tasks.stdout);
+  assert.equal(event.type, "help");
+  assert.match(event.data.text, /^Decompose plan into tasks only\n\nUsage: agent-loop tasks \[OPTIONS\]/);
+  assert.match(event.data.text, /Options:\n      --resume\n      --session <NAME>\n      --file <PATH>\n/);
+  assert.match(event.data.text, /--single-agent\n      --require-plan-approval/);
+});
+
+test("runtime command help uses Rust-shaped command-specific help", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+
+  const inline = await run(["inline", "--help"], project);
+  assert.equal(inline.code, 0);
+  assert.match(inline.stdout, /^Execute a task directly with a single agent call\n\nUsage: agent-loop inline \[OPTIONS\]/);
+  assert.match(inline.stdout, /--task <TASK>\s+Task description text/);
+  assert.match(inline.stdout, /--file <FILE>\s+Path to a task file/);
+  assert.match(inline.stdout, /Primary commands:\n  agent-loop spec <task>/);
+  assert.match(inline.stdout, /Elapsed: 00:00:00\n$/);
+  assert.equal(inline.stderr, "");
+
+  const review = await run(["help", "review"], project);
+  assert.equal(review.code, 0);
+  assert.match(review.stdout, /^Run a standalone code review, then fix confirmed findings\n\nUsage: agent-loop review \[OPTIONS\] \[CONTEXT\]/);
+  assert.match(review.stdout, /Arguments:\n  \[CONTEXT\]\s+Optional focus area or context for the review/);
+  assert.match(review.stdout, /--base <BASE>\s+Git ref to diff against/);
+  assert.match(review.stdout, /--files <FILES>\.\.\.\s+Explicit files to review instead of diff/);
+  assert.match(review.stdout, /--single-agent\s+Use single agent mode/);
+
+  const verify = await run(["--json", "verify", "--help"], project);
+  assert.equal(verify.code, 0);
+  assert.equal(verify.stderr, "");
+  let event = JSON.parse(verify.stdout);
+  assert.equal(event.type, "help");
+  assert.match(event.data.text, /^Run verification on completed implementation\n\nUsage: agent-loop verify \[OPTIONS\]/);
+  assert.match(event.data.text, /--resume\s+Resume a previously interrupted verification/);
+  assert.match(event.data.text, /--manual\s+Use manual \(interactive\) verification mode/);
+
+  const discuss = await run(["discuss", "--help"], project);
+  assert.equal(discuss.code, 0);
+  assert.match(discuss.stdout, /^Interactive requirements discussion before planning\n\nUsage: agent-loop discuss \[OPTIONS\]/);
+  assert.match(discuss.stdout, /--discover\s+Run a discovery prepass before discussion/);
+  assert.match(discuss.stdout, /--resume\s+Resume a previously interrupted discussion/);
+  assert.match(discuss.stdout, /Elapsed: 00:00:00\n$/);
+  assert.equal(discuss.stderr, "");
+
+  const chain = await run(["--json", "help", "chain"], project);
+  assert.equal(chain.code, 0);
+  assert.equal(chain.stderr, "");
+  event = JSON.parse(chain.stdout);
+  assert.equal(event.type, "help");
+  assert.match(event.data.text, /^Execute multiple plan files in sequence\n\nUsage: agent-loop chain \[OPTIONS\] <FILES>\.\.\./);
+  assert.match(event.data.text, /Arguments:\n  <FILES>\.\.\.\s+Plan files to execute in sequence/);
+  assert.match(event.data.text, /--command <COMMAND>\s+Command to run for each file \(default: from config\)/);
+});
+
+test("implementation command help uses Rust-shaped command-specific help", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+
+  const implement = await run(["implement", "--help"], project);
+  assert.equal(implement.code, 0);
+  assert.match(implement.stdout, /^Implement from tasks\.md, inline task text, or task file\n\nUsage: agent-loop implement \[OPTIONS\]/);
+  assert.match(implement.stdout, /Options:\n      --session <NAME>\n      --task <TASK>\n      --file <PATH>\n/);
+  assert.match(implement.stdout, /--resume\n      --require-plan-approval/);
+  assert.match(implement.stdout, /--per-task\n      --simple/);
+  assert.match(implement.stdout, /--wave\n      --max-retries <MAX_RETRIES>\s+\[default: 2\]/);
+  assert.match(implement.stdout, /--max-parallel <MAX_PARALLEL>\n      --tasks-model <MODEL>/);
+  assert.match(implement.stdout, /Primary commands:\n  agent-loop spec <task>/);
+  assert.match(implement.stdout, /Elapsed: 00:00:00\n$/);
+  assert.equal(implement.stderr, "");
+
+  const implementVerify = await run(["--json", "help", "implement-verify"], project);
+  assert.equal(implementVerify.code, 0);
+  assert.equal(implementVerify.stderr, "");
+  const event = JSON.parse(implementVerify.stdout);
+  assert.equal(event.type, "help");
+  assert.match(event.data.text, /^Run implement -> verify \(with full implement-mode flags\)\n\nUsage: agent-loop implement-verify \[OPTIONS\]/);
+  assert.match(event.data.text, /--task <TASK>\n      --file <PATH>/);
+  assert.match(event.data.text, /--action-model <ACTION=MODEL>\s+Override model for specific action/);
+});
+
+test("orchestration command help uses Rust-shaped command-specific help", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+
+  const supervise = await run(["supervise", "--help"], project);
+  assert.equal(supervise.code, 0);
+  assert.match(supervise.stdout, /^Run a supervised workflow through the deterministic Supervisor fallback\n\nUsage: agent-loop supervise \[OPTIONS\] \[TASK\]/);
+  assert.match(supervise.stdout, /Arguments:\n  \[TASK\]\s+Task description text/);
+  assert.match(supervise.stdout, /Options:\n      --file <FILE>\s+Path to a task file\n      --session <NAME>\n      --new-context/);
+  assert.match(supervise.stdout, /--phases <PHASES>\s+Comma-separated phases; defaults to the configured requirements workflow/);
+  assert.match(supervise.stdout, /--queue\s+Pick up or resume an item from goal-queue\.json/);
+  assert.match(supervise.stdout, /Primary commands:\n  agent-loop spec <task>/);
+  assert.match(supervise.stdout, /Elapsed: 00:00:00\n$/);
+  assert.equal(supervise.stderr, "");
+
+  const pipeline = await run(["--json", "help", "pipeline"], project);
+  assert.equal(pipeline.code, 0);
+  assert.equal(pipeline.stderr, "");
+  const event = JSON.parse(pipeline.stdout);
+  assert.equal(event.type, "help");
+  assert.match(event.data.text, /^Run an arbitrary sequence of phases/);
+  assert.match(event.data.text, /Usage: agent-loop pipeline \[OPTIONS\] --phases <PHASES>/);
+  assert.match(event.data.text, /Options:\n      --phases <PHASES>\s+Comma-separated list of phases: discuss,spec,plan,tasks,implement,verify\n      --session <NAME>/);
+  assert.match(event.data.text, /--task <TASK>\s+Task description text\n      --file <FILE>\s+Path to a task file/);
+  assert.match(event.data.text, /--discover\s+Run a discovery prepass before the first discuss\/spec\/plan phase in the pipeline/);
+  assert.match(event.data.text, /--resume\s+Resume from where a pipeline was interrupted/);
+});
+
+test("dedicated workflow command help uses Rust-shaped command-specific help", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+
+  const planImplement = await run(["plan-implement", "--help"], project);
+  assert.equal(planImplement.code, 0);
+  assert.match(planImplement.stdout, /^Run plan -> implement \(skip task decomposition\)\n\nUsage: agent-loop plan-implement \[OPTIONS\] \[TASK\]/);
+  assert.match(planImplement.stdout, /Arguments:\n  \[TASK\]\n/);
+  assert.match(planImplement.stdout, /Options:\n      --file <PATH>\n      --session <NAME>\n      --discover\s+Run a discovery prepass before planning/);
+  assert.match(planImplement.stdout, /--per-task\n      --simple/);
+  assert.match(planImplement.stdout, /--max-parallel <MAX_PARALLEL>\n      --tasks-model <MODEL>/);
+  assert.match(planImplement.stdout, /Primary commands:\n  agent-loop spec <task>/);
+  assert.match(planImplement.stdout, /Elapsed: 00:00:00\n$/);
+  assert.equal(planImplement.stderr, "");
+
+  const tasksImplement = await run(["help", "tasks-implement"], project);
+  assert.equal(tasksImplement.code, 0);
+  assert.match(tasksImplement.stdout, /^Run tasks -> implement \(skip planning, assumes plan\.md exists\)\n\nUsage: agent-loop tasks-implement \[OPTIONS\]/);
+  assert.match(tasksImplement.stdout, /Options:\n      --resume\n      --session <NAME>\n      --new-context/);
+  assert.match(tasksImplement.stdout, /--single-agent\n      --file <PATH>/);
+  assert.match(tasksImplement.stdout, /--per-task\n      --require-plan-approval/);
+  assert.match(tasksImplement.stdout, /--max-parallel <MAX_PARALLEL>\n      --plan-model <MODEL>/);
+
+  const planTasksImplement = await run(["--json", "plan-tasks-implement", "--help"], project);
+  assert.equal(planTasksImplement.code, 0);
+  assert.equal(planTasksImplement.stderr, "");
+  const event = JSON.parse(planTasksImplement.stdout);
+  assert.equal(event.type, "help");
+  assert.match(event.data.text, /^Run plan -> tasks -> implement end-to-end\n\nUsage: agent-loop plan-tasks-implement \[OPTIONS\] \[TASK\]/);
+  assert.match(event.data.text, /--discover\s+Run a discovery prepass before planning/);
+  assert.match(event.data.text, /--action-model <ACTION=MODEL>\s+Override model for specific action/);
+});
+
+test("pipeline alias help uses Rust-shaped command-specific help", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+
+  const specPlan = await run(["spec-plan", "--help"], project);
+  assert.equal(specPlan.code, 0);
+  assert.equal(specPlan.stderr, "");
+  assert.match(specPlan.stdout, /^Run spec -> plan\n\nUsage: agent-loop spec-plan \[OPTIONS\] \[TASK\]/);
+  assert.match(specPlan.stdout, /Arguments:\n  \[TASK\]\n/);
+  assert.match(specPlan.stdout, /Options:\n      --file <PATH>\n      --session <NAME>\n      --discover\n      --new-context/);
+  assert.match(specPlan.stdout, /--resume\n      --require-plan-approval/);
+  assert.match(specPlan.stdout, /Primary commands:\n  agent-loop spec <task>/);
+  assert.match(specPlan.stdout, /Elapsed: 00:00:00\n$/);
+
+  const planTasks = await run(["plan-tasks", "--help"], project);
+  assert.equal(planTasks.code, 0);
+  assert.equal(planTasks.stderr, "");
+  assert.match(planTasks.stdout, /^Run plan -> tasks \(planning prep\)\n\nUsage: agent-loop plan-tasks \[OPTIONS\] \[TASK\]/);
+
+  const specPlanImplement = await run(["spec-plan-implement", "--help"], project);
+  assert.equal(specPlanImplement.code, 0);
+  assert.equal(specPlanImplement.stderr, "");
+  assert.match(specPlanImplement.stdout, /^Run spec -> plan -> implement\n\nUsage: agent-loop spec-plan-implement \[OPTIONS\] \[TASK\]/);
+  assert.match(specPlanImplement.stdout, /--discover\n      --new-context/);
+  assert.match(specPlanImplement.stdout, /--single-agent\n      --no-plan-approval/);
+  assert.match(specPlanImplement.stdout, /--per-task\n      --simple/);
+  assert.match(specPlanImplement.stdout, /--max-parallel <MAX_PARALLEL>\n      --tasks-model <MODEL>/);
+
+  const planImplementVerify = await run(["--json", "help", "plan-implement-verify"], project);
+  assert.equal(planImplementVerify.code, 0);
+  assert.equal(planImplementVerify.stderr, "");
+  const event = JSON.parse(planImplementVerify.stdout);
+  assert.equal(event.type, "help");
+  assert.match(event.data.text, /^Run plan -> implement -> verify\n\nUsage: agent-loop plan-implement-verify \[OPTIONS\]/);
+  assert.doesNotMatch(event.data.text, /Usage: agent-loop plan-implement-verify \[OPTIONS\] \[TASK\]/);
+  assert.match(event.data.text, /Options:\n      --session <NAME>\n      --task <TASK>\n      --file <FILE>/);
+  assert.match(event.data.text, /--resume\n      --no-plan-approval/);
+  assert.match(event.data.text, /--action-model <ACTION=MODEL>\s+Override model for specific action/);
 });
 
 test("status reports Rust-shaped initialized output in plain and JSON modes", async () => {
@@ -190,6 +732,27 @@ test("fatal config errors are plain text normally and JSON events in --json mode
   const errorLine = JSON.parse(json.stderr.trim());
   assert.equal(errorLine.type, "error");
   assert.match(errorLine.data.message, /\.agent-loop\.json is not valid JSON \(/);
+});
+
+test("session validation errors use Rust config-error formatting", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const empty = await run(["--session", "", "status"], project);
+  assert.equal(empty.code, 1);
+  assert.equal(empty.stdout, "");
+  assert.equal(empty.stderr, "Config error: Session name cannot be empty.\n");
+
+  const invalid = await run(["--session", "../bad", "status"], project);
+  assert.equal(invalid.code, 1);
+  assert.equal(invalid.stdout, "");
+  assert.equal(
+    invalid.stderr,
+    "Config error: Invalid session name '../bad': only alphanumeric, hyphens, and underscores allowed.\n",
+  );
+
+  const jsonInvalid = await run(["--json", "--session", "../bad", "status"], project);
+  assert.equal(jsonInvalid.code, 1);
+  assert.equal(jsonInvalid.stdout, "");
+  assert.equal(jsonInvalid.stderr, invalid.stderr);
 });
 
 test("plan initializes state and does not create tasks.md", async () => {
@@ -453,7 +1016,7 @@ test("goal lifecycle validates Rust lifecycle-only flags and keeps runtime gaps 
   assert.match(resumeRun.stdout, /^No goal to resume\.\n/);
 });
 
-test("goal resume run marks active before unsupported resume orchestration", async () => {
+test("goal resume run delegates to resume routing and preserves no-state parity", async () => {
   const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
   const stateDir = resolve(project, ".agent-loop/state");
   await mkdir(stateDir, { recursive: true });
@@ -470,14 +1033,76 @@ test("goal resume run marks active before unsupported resume orchestration", asy
 
   const result = await run(["goal", "resume", "--run"], project);
 
-  assert.equal(result.code, 2);
-  assert.match(result.stdout, /^Goal active: "Ship reporting"\n/);
-  assert.match(result.stderr, /Unsupported in node-cli first pass: goal resume --run/);
+  assert.equal(result.code, 1);
+  assert.equal(result.stdout, "Goal active: \"Ship reporting\"\n");
+  assert.match(result.stderr, /^No resumable state found\. Start a new run with `agent-loop supervise --file <task\.md>` or another pipeline command\.\n/);
   const goal = JSON.parse(await readFile(resolve(stateDir, "goal.json"), "utf8"));
   assert.equal(goal.status, "active");
   assert.equal(goal.updated_at, "2026-01-02T03:04:05.006Z");
   assert.equal(Object.hasOwn(goal, "reason"), false);
   assert.equal(await readFile(resolve(stateDir, "goal.lock"), "utf8"), "");
+
+  await writeFile(resolve(stateDir, "goal.json"), `${JSON.stringify({
+    schema_version: 1,
+    goal_id: "goal-json",
+    objective: "Ship JSON reporting",
+    status: "paused",
+    phases: ["spec", "plan", "tasks", "implement", "verify"],
+    created_at: "2026-01-01T00:00:00.000Z",
+    updated_at: "2026-01-01T00:00:00.000Z",
+    reason: "Paused by user.",
+  })}\n`);
+  const json = await run(["--json", "goal", "resume", "--run"], project);
+  assert.equal(json.code, 1);
+  assert.equal(json.stderr, "");
+  assert.deepEqual(JSON.parse(json.stdout.trim()), {
+    type: "command_started",
+    protocol_version: 1,
+    seq: 1,
+    ts: "2026-01-02T03:04:05.006Z",
+    data: {
+      command: "resume",
+      isPipeline: false,
+    },
+  });
+  const jsonGoal = JSON.parse(await readFile(resolve(stateDir, "goal.json"), "utf8"));
+  assert.equal(jsonGoal.status, "active");
+  assert.equal(Object.hasOwn(jsonGoal, "reason"), false);
+});
+
+test("goal resume run finalizes after a supported complete resume route", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(resolve(stateDir, "goal.json"), `${JSON.stringify({
+    schema_version: 1,
+    goal_id: "goal-complete",
+    objective: "Complete reporting",
+    status: "paused",
+    phases: ["spec", "plan", "tasks", "implement", "verify"],
+    created_at: "2026-01-01T00:00:00.000Z",
+    updated_at: "2026-01-01T00:00:00.000Z",
+    reason: "Paused by user.",
+  })}\n`);
+  await writeFile(resolve(stateDir, "workflow.txt"), "verify\n");
+  await writeFile(resolve(stateDir, "status.json"), JSON.stringify({
+    status: "VERIFIED",
+    round: 1,
+    timestamp: "2026-01-01T00:00:00.000Z",
+  }));
+
+  const result = await run(["goal", "resume", "--run"], project);
+
+  assert.equal(result.code, 0);
+  assert.equal(
+    result.stdout,
+    "Goal active: \"Complete reporting\"\nNo Supervisor checkpoint found; using `agent-loop next` routing.\nPipeline complete. Nothing to do.\n",
+  );
+  assert.equal(result.stderr, "");
+  const goal = JSON.parse(await readFile(resolve(stateDir, "goal.json"), "utf8"));
+  assert.equal(goal.status, "complete");
+  assert.equal(goal.reason, "Goal run completed.");
+  assert.equal(goal.updated_at, "2026-01-02T03:04:05.006Z");
 });
 
 test("queue lifecycle commands mutate Rust-compatible queue state", async () => {
@@ -4281,7 +4906,7 @@ test("completions generates scripts for Rust-supported shells", async () => {
   assert.match(bash.stdout, /_agent_loop_node_cli/);
   assert.match(bash.stdout, /complete -F _agent_loop_node_cli agent-loop-node/);
   assert.match(bash.stdout, /plan-tasks-implement-verify/);
-  assert.match(bash.stderr, /^elapsed: /);
+  assert.equal(bash.stderr, "");
 
   const fish = await run(["--json", "completions", "fish"], project);
   assert.equal(fish.code, 0);
@@ -4295,11 +4920,39 @@ test("completions generates scripts for Rust-supported shells", async () => {
   assert.match(powershell.stdout, /agent-loop-node/);
 });
 
-test("list-agents prints Rust-shaped JSON and elapsed on stderr", async () => {
+test("completions validation errors use Rust config-error formatting", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+
+  const missing = await run(["completions"], project);
+  assert.equal(missing.code, 1);
+  assert.equal(missing.stdout, "");
+  assert.equal(
+    missing.stderr,
+    "Config error: error: the following required arguments were not provided:\n  <SHELL>\n\nUsage: agent-loop completions <SHELL>\n\nFor more information, try '--help'.\n",
+  );
+
+  const invalid = await run(["--json", "completions", "nope"], project);
+  assert.equal(invalid.code, 1);
+  assert.equal(invalid.stdout, "");
+  assert.equal(
+    invalid.stderr,
+    "Config error: error: invalid value 'nope' for '<SHELL>'\n  [possible values: bash, elvish, fish, powershell, zsh]\n\nFor more information, try '--help'.\n",
+  );
+
+  const extra = await run(["completions", "bash", "extra"], project);
+  assert.equal(extra.code, 1);
+  assert.equal(extra.stdout, "");
+  assert.equal(
+    extra.stderr,
+    "Config error: error: unexpected argument 'extra' found\n\nUsage: agent-loop completions [OPTIONS] <SHELL>\n\nFor more information, try '--help'.\n",
+  );
+});
+
+test("list-agents prints Rust-shaped JSON without elapsed stderr", async () => {
   const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
   const result = await run(["list-agents"], project, { PATH: "" });
   assert.equal(result.code, 0);
-  assert.match(result.stderr, /^elapsed: /);
+  assert.equal(result.stderr, "");
   const agents = JSON.parse(result.stdout);
   assert.deepEqual(
     agents.map((agent) => agent.name),
@@ -5042,6 +5695,170 @@ test("resume non-dry-run routes saved pipeline through unsupported handler", asy
   assert.match(result.stderr, /Unsupported in node-cli first pass: pipeline/);
 });
 
+test("resume non-dry-run delegates complete fallback through next", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(resolve(stateDir, "workflow.txt"), "verify\n");
+  await writeFile(resolve(stateDir, "status.json"), JSON.stringify({
+    status: "VERIFIED",
+    round: 1,
+    timestamp: "2026-01-01T00:00:00.000Z",
+  }));
+
+  const result = await run(["resume"], project);
+  assert.equal(result.code, 0);
+  assert.equal(
+    result.stdout,
+    "No Supervisor checkpoint found; using `agent-loop next` routing.\nPipeline complete. Nothing to do.\n",
+  );
+  assert.equal(result.stderr, "");
+
+  const json = await run(["--json", "resume"], project);
+  assert.equal(json.code, 0);
+  assert.equal(json.stderr, "");
+  assert.deepEqual(JSON.parse(json.stdout.trim()), {
+    type: "command_started",
+    protocol_version: 1,
+    seq: 1,
+    ts: "2026-01-02T03:04:05.006Z",
+    data: {
+      command: "next",
+      isPipeline: false,
+    },
+  });
+});
+
+test("resume finalizes an active goal after a supported complete route", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(resolve(stateDir, "goal.json"), `${JSON.stringify({
+    schema_version: 1,
+    goal_id: "active-goal",
+    objective: "Active goal objective",
+    status: "active",
+    phases: ["spec", "plan", "tasks", "implement", "verify"],
+    created_at: "2026-01-01T00:00:00.000Z",
+    updated_at: "2026-01-01T00:00:00.000Z",
+  })}\n`);
+  await writeFile(resolve(stateDir, "workflow.txt"), "verify\n");
+  await writeFile(resolve(stateDir, "status.json"), JSON.stringify({
+    status: "VERIFIED",
+    round: 1,
+    timestamp: "2026-01-01T00:00:00.000Z",
+  }));
+
+  const result = await run(["resume"], project);
+
+  assert.equal(result.code, 0);
+  assert.equal(
+    result.stdout,
+    "No Supervisor checkpoint found; using `agent-loop next` routing.\nPipeline complete. Nothing to do.\n",
+  );
+  assert.equal(result.stderr, "");
+  const goal = JSON.parse(await readFile(resolve(stateDir, "goal.json"), "utf8"));
+  assert.equal(goal.status, "complete");
+  assert.equal(goal.reason, "Goal run completed.");
+  assert.equal(goal.updated_at, "2026-01-02T03:04:05.006Z");
+});
+
+test("resume finalizes an active queue item after a supported complete route", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(resolve(stateDir, "goal-queue.json"), `${JSON.stringify({
+    schema_version: 1,
+    items: [{
+      queue_id: "active-queue-item",
+      title: "Active queue item",
+      objective: "Active queue objective",
+      status: "active",
+      priority: 1,
+      active_slice_id: "slice-a",
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:00:00.000Z",
+    }],
+  })}\n`);
+  await writeFile(resolve(stateDir, "workflow.txt"), "verify\n");
+  await writeFile(resolve(stateDir, "status.json"), JSON.stringify({
+    status: "VERIFIED",
+    round: 1,
+    timestamp: "2026-01-01T00:00:00.000Z",
+  }));
+
+  const result = await run(["--json", "resume"], project);
+
+  assert.equal(result.code, 0);
+  assert.equal(result.stderr, "");
+  assert.deepEqual(JSON.parse(result.stdout.trim()), {
+    type: "command_started",
+    protocol_version: 1,
+    seq: 1,
+    ts: "2026-01-02T03:04:05.006Z",
+    data: {
+      command: "next",
+      isPipeline: false,
+    },
+  });
+  const goal = JSON.parse(await readFile(resolve(stateDir, "goal.json"), "utf8"));
+  assert.equal(goal.status, "complete");
+  assert.equal(goal.reason, "Goal run completed.");
+  const queue = JSON.parse(await readFile(resolve(stateDir, "goal-queue.json"), "utf8"));
+  assert.equal(queue.items[0].status, "done");
+  assert.equal(queue.items[0].reason, "Queue item completed.");
+  assert.equal(queue.items[0].updated_at, "2026-01-02T03:04:05.006Z");
+  assert.equal(Object.hasOwn(queue.items[0], "active_slice_id"), false);
+});
+
+test("resume finalizes an active queue item as blocked after a supported non-zero route", async () => {
+  const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
+  const stateDir = resolve(project, ".agent-loop/state");
+  await mkdir(stateDir, { recursive: true });
+  await writeFile(resolve(stateDir, "goal.json"), `${JSON.stringify({
+    schema_version: 1,
+    goal_id: "active-goal",
+    objective: "Active queue objective",
+    status: "active",
+    phases: ["spec", "plan", "tasks", "implement", "verify"],
+    created_at: "2026-01-01T00:00:00.000Z",
+    updated_at: "2026-01-01T00:00:00.000Z",
+  })}\n`);
+  await writeFile(resolve(stateDir, "goal-queue.json"), `${JSON.stringify({
+    schema_version: 1,
+    items: [{
+      queue_id: "active-queue-item",
+      title: "Active queue item",
+      objective: "Active queue objective",
+      status: "active",
+      priority: 1,
+      active_slice_id: "slice-a",
+      created_at: "2026-01-01T00:00:00.000Z",
+      updated_at: "2026-01-01T00:00:00.000Z",
+    }],
+  })}\n`);
+  await writeFile(resolve(stateDir, "workflow.txt"), "implement\n");
+  await writeFile(resolve(stateDir, "status.json"), JSON.stringify({
+    status: "ERROR",
+    round: 1,
+    timestamp: "2026-01-01T00:00:00.000Z",
+  }));
+
+  const result = await run(["resume"], project);
+
+  assert.equal(result.code, 1);
+  assert.equal(result.stdout, "No Supervisor checkpoint found; using `agent-loop next` routing.\n");
+  assert.match(result.stderr, /^Previous run failed with ERROR\. Resume or reset\.\n/);
+  const goal = JSON.parse(await readFile(resolve(stateDir, "goal.json"), "utf8"));
+  assert.equal(goal.status, "active");
+  assert.equal(Object.hasOwn(goal, "reason"), false);
+  const queue = JSON.parse(await readFile(resolve(stateDir, "goal-queue.json"), "utf8"));
+  assert.equal(queue.items[0].status, "blocked");
+  assert.equal(queue.items[0].reason, "Queue run exited with code 1.");
+  assert.equal(queue.items[0].active_slice_id, "slice-a");
+  assert.equal(queue.items[0].updated_at, "2026-01-02T03:04:05.006Z");
+});
+
 test("resume with a paused goal reports the Rust action-required message", async () => {
   const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
   const stateDir = resolve(project, ".agent-loop/state");
@@ -5058,7 +5875,7 @@ test("resume with a paused goal reports the Rust action-required message", async
 
   const result = await run(["resume"], project);
   assert.equal(result.code, 1);
-  assert.match(result.stdout, /^elapsed: /);
+  assert.equal(result.stdout, "");
   assert.match(
     result.stderr,
     /^Goal is paused: "Paused goal objective"\. Run 'agent-loop goal resume --run' to reactivate and continue, or 'agent-loop goal resume' to only mark it active\.\n/,
@@ -5101,7 +5918,7 @@ test("resume dry-run and action-required output use queue_id for deferred queue 
 
   const resume = await run(["resume"], project);
   assert.equal(resume.code, 1);
-  assert.match(resume.stdout, /^elapsed: /);
+  assert.equal(resume.stdout, "");
   assert.match(
     resume.stderr,
     /^Queue item is deferred: "Deferred queue item"\. Run 'agent-loop queue resume deferred-queue-item --run' to reactivate and continue\.\n/,
@@ -5189,7 +6006,7 @@ test("resume non-dry-run delegates interrupted workflow after preamble", async (
   assert.equal(result.stderr, "");
 });
 
-test("resume non-dry-run prints next-routing preamble before fallback selection", async () => {
+test("resume non-dry-run delegates next-routing fallback", async () => {
   const project = await mkdtemp(resolve(tmpdir(), "agent-loop-node-"));
   const stateDir = resolve(project, ".agent-loop/state");
   await mkdir(stateDir, { recursive: true });
@@ -5200,7 +6017,7 @@ test("resume non-dry-run prints next-routing preamble before fallback selection"
   assert.equal(result.code, 0);
   assert.deepEqual(result.stdout.trim().split(/\r?\n/).slice(0, 2), [
     "No Supervisor checkpoint found; using `agent-loop next` routing.",
-    "agent-loop plan",
+    "Plan state initialized. Runtime execution is unsupported in node-cli first pass.",
   ]);
   assert.equal(result.stderr, "");
 });
@@ -5219,7 +6036,10 @@ test("reset preserves decisions and wave-lock reset touches only the lock", asyn
   await writeFile(resolve(project, ".agent-loop/state/history/event.json"), "{}\n");
   const invalid = await run(["reset", "unexpected"], project);
   assert.equal(invalid.code, 1);
-  assert.match(invalid.stderr, /unexpected argument 'unexpected' for reset/);
+  assert.equal(
+    invalid.stderr,
+    "Config error: error: unexpected argument 'unexpected' found\n\nUsage: agent-loop reset [OPTIONS]\n\nFor more information, try '--help'.\n",
+  );
   assert.equal(await readFile(resolve(project, ".agent-loop/state/status.json"), "utf8").then(() => "exists"), "exists");
   const lock = await run(["reset", "--wave-lock"], project);
   assert.equal(lock.code, 0);

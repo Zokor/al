@@ -3,18 +3,656 @@
 Convert `node-cli` into a 1:1 functional port of the Rust `agent-loop` CLI while
 keeping the JavaScript implementation simple, incremental, and evidence-backed.
 
-## Active Slice: dedicated implementation workflow commands
+## Active Slice: numeric command option validation parity-smoke evidence
 
-- [ ] Define supported first-pass behavior for `plan-implement`,
-      `tasks-implement`, and `plan-tasks-implement`.
-- [ ] Parse and dispatch the dedicated workflow commands as supported pipeline
-      compositions without Rust's legacy-alias note.
-- [ ] Route runnable default batch-compatible paths through existing plan/tasks
-      shell and implement runtime primitives.
-- [ ] Update docs/parity notes so unsupported commands only list true current
-      boundaries.
-- [ ] Verify with focused parser/command tests, lint, full tests, smoke parity,
-      and `git diff --check`.
+ASSUMPTIONS:
+1. Rust clap output is authoritative for invalid numeric option values such as
+   `--max-retries abc` and `queue add --priority abc`.
+2. This slice only changes deterministic numeric validation stderr; valid
+   numeric parsing and runtime dispatch stay unchanged.
+
+PLAN:
+- [ ] Align Node numeric command option validation errors with Rust
+      `Config error:` output for implementation, pipeline, goal, and queue
+      parser surfaces.
+- [ ] Add Rust-vs-Node parity-smoke scenarios for representative invalid
+      numeric values and minimum-value failures in plain and JSON global modes.
+- [ ] Update parity docs/tests to cite numeric validation evidence while keeping
+      deeper command runtime behavior partial.
+- [ ] Verify focused parser/command/docs/smoke tests, lint, full Node tests,
+      smoke parity, and diff hygiene.
+
+## Completed Slice: command semantic conflict parity-smoke evidence
+
+ASSUMPTIONS:
+1. Rust `Config error:` prefix is authoritative for semantic parser conflicts
+   that happen before runtime.
+2. This slice only changes deterministic validation stderr; successful command
+   parsing and runtime dispatch stay unchanged.
+
+PLAN:
+- [x] Align Node semantic conflict validation errors with Rust `Config error:`
+      output for implementation, pipeline, and review parser surfaces.
+- [x] Add Rust-vs-Node parity-smoke scenarios for representative semantic
+      conflicts in plain and JSON global modes.
+- [x] Update parity docs/tests to cite semantic conflict evidence while keeping
+      deeper command runtime behavior partial.
+- [x] Verify focused parser/command/docs/smoke tests, lint, full Node tests,
+      smoke parity, and diff hygiene.
+
+## Review: command semantic conflict parity-smoke evidence
+
+- Aligned Node semantic parser conflict failures with Rust `Config error:`
+  output for implementation, pipeline, and review parser surfaces.
+- Added Rust-vs-Node smoke scenarios for representative implementation
+  task/file, resume/task, mutually exclusive mode, continue/fail-fast, pipeline,
+  review, and JSON-mode conflicts.
+- Updated the command parser validation matrix/tests while leaving deeper
+  runtime behavior partial.
+- Verification: `npm test -- test/parser.test.js test/commands.test.js test/docs.test.js test/parity-smoke.test.js`,
+  `npm run parity:smoke -- --scenario command-implement-task-file-conflict,json-command-implement-task-file-conflict,command-implement-resume-task-conflict,command-implement-wave-per-task-conflict,command-implement-continue-failfast-conflict,command-pipeline-wave-per-task-conflict,command-review-files-base-conflict`,
+  `npm run lint`, `npm test -- --test-reporter=dot`,
+  `npm run parity:smoke`, and `git -C node-cli diff --check`.
+
+## Completed Slice: command boolean inline-value parity-smoke evidence
+
+ASSUMPTIONS:
+1. Rust clap output is authoritative for command boolean flags that reject
+   inline values such as `--force=true` or `--resume=true`.
+2. This slice only changes deterministic parse failures; valid boolean flag
+   behavior and runtime dispatch stay unchanged.
+
+PLAN:
+- [x] Align Node command boolean inline-value failures with Rust `Config error:`
+      output for representative low-runtime, phase, implementation, review,
+      goal, and queue parser surfaces.
+- [x] Add Rust-vs-Node parity-smoke scenarios for representative boolean
+      inline-value failures in plain and JSON global modes.
+- [x] Update parity docs/tests to cite boolean inline-value evidence while
+      keeping deeper command runtime behavior partial.
+- [x] Verify focused parser/command/docs/smoke tests, lint, full Node tests,
+      smoke parity, and diff hygiene.
+
+## Review: command boolean inline-value parity-smoke evidence
+
+- Aligned command boolean inline-value failures with Rust `Config error:`
+  output for representative low-runtime, phase, implementation, review, goal,
+  and queue parser surfaces.
+- Fixed parser branches that previously accepted inline values for `resume
+  --dry-run`, `reset --wave-lock`, and `verify --manual/--resume`.
+- Added Rust-vs-Node smoke scenarios for representative plain and JSON
+  boolean inline-value failures and updated parser/runtime/docs tests.
+- Verification: `npm test -- test/parser.test.js test/commands.test.js test/docs.test.js test/parity-smoke.test.js`,
+  `npm run parity:smoke -- --scenario command-init-force-inline-value,json-command-init-force-inline-value,command-resume-dry-run-inline-value,command-reset-wave-lock-inline-value,command-verify-manual-inline-value,command-plan-resume-inline-value,command-implement-per-task-inline-value,command-review-single-agent-inline-value,command-goal-run-inline-value,command-queue-run-inline-value`,
+  `npm run lint`, `npm test -- --test-reporter=dot`,
+  `npm run parity:smoke`, and `git -C node-cli diff --check`.
+
+## Completed Slice: required command argument parity-smoke evidence
+
+ASSUMPTIONS:
+1. Rust clap output is authoritative for required command parser arguments:
+   `approve`/`reject` phase, `reject --reason`, and `pipeline --phases`.
+2. This slice only changes deterministic parse failures; successful command
+   behavior and runtime dispatch stay unchanged.
+
+PLAN:
+- [x] Align Node required command argument failures with Rust `Config error:`
+      output for approval, rejection, and pipeline parser surfaces.
+- [x] Add Rust-vs-Node parity-smoke scenarios for representative required
+      argument failures in plain and JSON global modes.
+- [x] Update parity docs/tests to cite required-argument evidence while keeping
+      deeper runtime behavior partial.
+- [x] Verify focused parser/command/docs/smoke tests, lint, full Node tests,
+      smoke parity, and diff hygiene.
+
+## Review: required command argument parity-smoke evidence
+
+- Aligned Node required command parser failures with Rust `Config error:`
+  output for missing `approve` phase, missing `reject` phase/reason/both
+  requireds, and missing `pipeline --phases`.
+- Added Rust-vs-Node smoke scenarios for plain and JSON required-argument
+  failures for approval and pipeline parser paths, plus rejection requireds.
+- Updated the command parser validation matrix/tests while leaving queue
+  missing-subcommand help output as an explicit partial boundary.
+- Verification: `npm test -- test/parser.test.js test/commands.test.js test/docs.test.js test/parity-smoke.test.js`,
+  `npm run parity:smoke -- --scenario command-approve-missing-phase,json-command-approve-missing-phase,command-reject-missing-phase,command-reject-missing-reason,command-reject-missing-requireds,command-pipeline-required-phases,json-command-pipeline-required-phases`,
+  `npm run lint`, `npm test -- --test-reporter=dot`,
+  `npm run parity:smoke`, and `git -C node-cli diff --check`.
+
+## Completed Slice: command parser validation parity-smoke evidence
+
+ASSUMPTIONS:
+1. Rust clap output is authoritative for deterministic command parser failures
+   that do not enter agent/provider runtime.
+2. This slice only normalizes validation failures; successful command behavior
+   and runtime dispatch stay unchanged.
+
+PLAN:
+- [x] Align Node unknown command, unknown subcommand, unexpected argument, and
+      missing command-option value errors with Rust `Config error:` output.
+- [x] Add Rust-vs-Node parity-smoke scenarios for representative command parser
+      failures in plain and JSON global modes.
+- [x] Update parity docs/tests to cite validation evidence while keeping runtime
+      behavior partial where command execution is still incomplete.
+- [x] Verify focused parser/command/docs/smoke tests, lint, full Node tests,
+      smoke parity, and diff hygiene.
+
+## Review: command parser validation parity-smoke evidence
+
+- Aligned Node command parser failures with Rust `Config error:` output for
+  unknown top-level commands, generic unexpected command arguments, missing
+  command-option values, and unknown queue subcommands.
+- Added Rust-vs-Node smoke scenarios for plain and JSON unknown commands,
+  plain and JSON unexpected `status` arguments, representative missing
+  `--file`/`--files` values, and unknown queue subcommands.
+- Added a command parser validation block to the parity matrix and docs tests
+  while keeping broader command-specific semantic validation partial.
+- Verification: `npm test -- test/parser.test.js test/commands.test.js test/docs.test.js test/parity-smoke.test.js`,
+  `npm run parity:smoke -- --scenario command-unknown,json-command-unknown,command-status-extra,json-command-status-extra,command-plan-file-missing,command-review-files-missing,command-queue-unknown-subcommand`,
+  `npm run lint`, `npm test -- --test-reporter=dot`,
+  `npm run parity:smoke`, and `git -C node-cli diff --check`.
+
+## Completed Slice: action override validation parity-smoke evidence
+
+ASSUMPTIONS:
+1. Rust action override parse/collection errors are authoritative for
+   `--*-model`, `--*-effort`, `--action-model`, and `--action-effort`.
+2. This slice only changes deterministic validation failures; successful
+   override ordering and provider resolution remain unchanged.
+
+PLAN:
+- [x] Align Node missing-value and semantic validation errors for model/effort
+      override flags with Rust `Config error:` output.
+- [x] Add Rust-vs-Node parity-smoke scenarios for representative action override
+      failures in plain and JSON global modes.
+- [x] Update parity docs/tests to cite validation evidence while keeping provider
+      invocation behavior partial.
+- [x] Verify focused parser/docs/smoke tests, lint, full Node tests, smoke
+      parity, and diff hygiene.
+
+## Review: action override validation parity-smoke evidence
+
+- Aligned Node action override validation failures with Rust `Config error:`
+  output for missing `--*-model`, missing/invalid `--*-effort`,
+  `--action-model`, and `--action-effort` values.
+- Added Rust-vs-Node smoke scenarios for representative missing-value, invalid
+  shape, unknown action, invalid effort, and JSON-mode invalid effort failures.
+- Updated parity docs/tests to cite validation evidence while keeping provider
+  invocation behavior partial.
+- Verification: `npm test -- test/parser.test.js test/commands.test.js test/docs.test.js test/parity-smoke.test.js`,
+  `npm run parity:smoke -- --scenario global-plan-model-missing,global-plan-effort-missing,global-plan-effort-invalid,global-action-model-missing,global-action-model-invalid-shape,global-action-model-unknown-action,global-action-effort-missing,global-action-effort-invalid-shape,global-action-effort-invalid-effort,global-action-effort-unknown-action,json-global-plan-effort-invalid`,
+  `npm run lint`, `npm test -- --test-reporter=dot`,
+  `npm run parity:smoke`, and `git -C node-cli diff --check`.
+
+## Completed Slice: global option validation parity-smoke evidence
+
+ASSUMPTIONS:
+1. Rust clap output is authoritative for deterministic global-option parse
+   failures.
+2. This slice should stay at the parser boundary and avoid changing successful
+   command behavior.
+
+PLAN:
+- [x] Align Node global option validation errors with Rust for missing value,
+      invalid `--requirements-workflow`, approval-flag conflict, boolean values,
+      and unknown leading options.
+- [x] Add Rust-vs-Node parity-smoke scenarios for representative global-option
+      failures in plain and JSON global modes.
+- [x] Update parity docs/tests to cite global option validation evidence while
+      keeping runtime behavior partial where agent execution is still missing.
+- [x] Verify focused parser/command/docs/smoke tests, lint, full Node tests,
+      smoke parity, and diff hygiene.
+
+## Review: global option validation parity-smoke evidence
+
+- Aligned Node global-option parse failures with Rust clap-shaped
+  `Config error:` output for missing values, invalid `--requirements-workflow`,
+  approval-flag conflicts, boolean inline values, and unknown leading options.
+- Added Rust-vs-Node smoke scenarios for representative global-option failures,
+  including JSON global mode for invalid `--requirements-workflow`.
+- Updated parity docs/tests to cite validation evidence while keeping runtime
+  behavior partial for options whose effect depends on agent/provider execution.
+- Verification: `npm test -- test/parser.test.js test/commands.test.js test/parity-smoke.test.js`,
+  `npm run parity:smoke -- --scenario global-requirements-workflow-invalid,global-requirements-workflow-missing,global-session-missing,global-implementer-missing,global-reviewer-missing,global-plan-approval-conflict,global-simple-unexpected-value,global-unknown-leading-option,json-global-requirements-workflow-invalid`,
+  `npm test -- test/docs.test.js test/parser.test.js test/commands.test.js test/parity-smoke.test.js`,
+  `npm run lint`, `npm test -- --test-reporter=dot`, `npm run parity:smoke`,
+  and `git -C node-cli diff --check`.
+
+## Completed Slice: completions validation parity-smoke evidence
+
+ASSUMPTIONS:
+1. Rust clap errors are authoritative for `completions` argument validation.
+2. Exact generated completion script output remains partial; this slice only
+   aligns missing, invalid, and unexpected shell argument failures.
+
+PLAN:
+- [x] Align Node `completions` missing/invalid/extra argument errors with Rust.
+- [x] Add Rust-vs-Node parity-smoke scenarios for `completions` validation
+      failures in plain and JSON global modes.
+- [x] Update parity docs/tests to cite validation evidence while keeping exact
+      `clap_complete` output as an explicit gap.
+- [x] Verify focused parser/command/docs/smoke tests, lint, full Node tests,
+      smoke parity, and diff hygiene.
+
+## Review: completions validation parity-smoke evidence
+
+- Aligned Node `completions` validation failures with Rust clap-shaped
+  `Config error:` output for missing shell, invalid shell, and unexpected
+  extra argument cases.
+- Added Rust-vs-Node smoke scenarios for missing-shell, invalid-shell,
+  extra-argument, and JSON-mode invalid-shell validation failures.
+- Updated parity docs and unsupported docs to cite validation parity while
+  keeping exact generated Rust `clap_complete` output marked partial.
+- Verification: `npm test -- test/parser.test.js test/commands.test.js test/parity-smoke.test.js`,
+  `npm run parity:smoke -- --scenario completions-missing-shell,completions-invalid-shell,completions-extra-argument,json-completions-invalid-shell`,
+  `npm test -- test/docs.test.js test/parser.test.js test/commands.test.js test/parity-smoke.test.js`,
+  `npm run lint`, `npm test -- --test-reporter=dot`, `npm run parity:smoke`,
+  and `git -C node-cli diff --check`.
+
+## Completed Slice: init parity-smoke evidence
+
+ASSUMPTIONS:
+1. Rust `init` behavior is authoritative for exit codes and stdout/stderr
+   routing, while Node's `.agent-loop.json` output is an intentional divergence.
+2. Smoke coverage should normalize only the expected `.agent-loop.toml` vs
+   `.agent-loop.json` filename/path text and still compare the command result.
+
+PLAN:
+- [x] Add Rust-vs-Node parity-smoke scenarios for default `init`, JSON `init`,
+      existing config refusal, and `init --force`.
+- [x] Compare canonical config-file creation using Rust's TOML file and Node's
+      JSON file without pretending the contents are byte-compatible.
+- [x] Update parity docs/tests to cite the `init` smoke evidence and the
+      intentional filename normalization.
+- [x] Verify focused smoke/docs tests, lint, full Node tests, smoke parity, and
+      diff hygiene.
+
+## Review: init parity-smoke evidence
+
+- Added Rust-vs-Node smoke scenarios for default `init`, JSON `init`,
+  existing canonical config refusal, and `init --force`.
+- Normalized only the intentional `.agent-loop.toml` vs `.agent-loop.json`
+  filename/path output difference, while still comparing stdout, stderr, and
+  exit code.
+- Added canonical config file-pair presence checks so Rust's TOML file and
+  Node's JSON file are both verified after the smoke scenarios.
+- Updated the parity matrix and docs tests to cite the new `init` smoke
+  evidence and keep the JSON/TOML divergence explicit.
+- Verification: `npm run parity:smoke -- --scenario init-empty,json-init-empty,init-existing-config,init-force-existing-config`,
+  `npm test -- test/docs.test.js test/parity-smoke.test.js`,
+  `npm run lint`, `npm test -- --test-reporter=dot`, `npm run parity:smoke`,
+  and `git -C node-cli diff --check`.
+
+## Completed Slice: session validation parity-smoke evidence
+
+ASSUMPTIONS:
+1. Rust `cli/src/config/session.rs` is the source of truth for session-name
+   validation and error text.
+2. Node should keep validation centralized in `src/state/paths.js` and avoid a
+   broader parser rewrite for this slice.
+
+PLAN:
+- [x] Align Node session-name validation with Rust for empty, too-long, and
+      invalid-character values.
+- [x] Add Rust-vs-Node parity-smoke scenarios for invalid `--session` values.
+- [x] Update parity docs/tests to cite session validation evidence while keeping
+      broader session runtime gaps explicit.
+- [x] Verify focused tests/smoke, lint, full Node tests, smoke parity, and diff
+      hygiene.
+
+## Review: session validation parity-smoke evidence
+
+- Aligned Node session-name validation with Rust for empty, invalid-character,
+  and too-long values, including Rust-style `Config error:` text.
+- Preserved JSON error events for non-`Config error:` failures while matching
+  Rust's plain stderr behavior for config validation failures under `--json`.
+- Added Rust-vs-Node smoke scenarios for empty, invalid-character, too-long,
+  and JSON-mode invalid session names.
+- Updated parity docs/tests to cite session validation evidence while leaving
+  broader resume and agent-invocation session behavior marked partial.
+- Verification: `npm test -- test/state.test.js test/commands.test.js`,
+  `npm run parity:smoke -- --scenario status-empty-session-name,status-invalid-session-name,status-too-long-session-name,json-status-invalid-session-name`,
+  `npm test -- test/docs.test.js test/state.test.js test/commands.test.js test/parity-smoke.test.js`,
+  `npm run lint`, `npm test -- --test-reporter=dot`, `npm run parity:smoke`,
+  and `git -C node-cli diff --check`.
+
+## Completed Slice: session status parity-smoke evidence
+
+- [x] Compare Rust and Node `--session demo status` with session-scoped state.
+- [x] Add a Rust-vs-Node parity-smoke scenario for session-scoped `status`.
+- [x] Update parity docs/ledger to cite `--session` status path evidence while
+      keeping broader session runtime gaps explicit.
+- [x] Verify focused smoke/docs tests, lint, full Node tests, smoke parity, and
+      diff hygiene.
+
+## Review: session status parity-smoke evidence
+
+- Added Rust-vs-Node parity-smoke scenarios for plain and JSON
+  `--session demo status` using `.agent-loop/state/demo/status.json`.
+- The smoke harness now compares stdout, stderr, exit code, and the
+  session-scoped `status.json` fixture for this global option path.
+- Updated the global option matrix to cite session status evidence while keeping
+  resume and agent-invocation session behavior marked partial.
+- Verification: `npm test -- test/docs.test.js test/parity-smoke.test.js test/state.test.js`,
+  `npm run parity:smoke -- --scenario status-session-initialized-plan,json-status-session-initialized-plan`,
+  `npm run lint`, `npm test -- --test-reporter=dot`, `npm run parity:smoke`,
+  and `git -C node-cli diff --check`.
+
+## Completed Slice: config discovery parity boundary
+
+- [x] Add focused runtime tests for `.agent-loop.toml` discovery warnings when
+      no `.agent-loop.json` exists.
+- [x] Add focused runtime tests for `.agent-loop.json` precedence when both
+      config files exist.
+- [x] Update parity docs/ledger to describe the runtime config-file divergence
+      with test evidence.
+- [x] Verify focused config/docs tests, lint, full Node tests, smoke parity,
+      and diff hygiene.
+
+## Review: config discovery parity boundary
+
+- Strengthened runtime config discovery tests for the intentional divergence:
+  Rust reads `.agent-loop.toml`, while Node reads `.agent-loop.json`.
+- The TOML-only path now proves Node ignores the TOML values, keeps defaults,
+  and emits a migration warning to stderr.
+- The TOML-plus-JSON path now proves JSON wins, the TOML is reported as ignored,
+  and the warning is emitted to stderr.
+- Updated parity docs and unsupported docs so the config-file divergence,
+  TOML discovery warning, and JSON precedence behavior stay explicit.
+- Verification: `npm test -- test/config.test.js test/docs.test.js test/commands.test.js`,
+  `npm run lint`, `npm test -- --test-reporter=dot`, `npm run parity:smoke`,
+  and `git -C node-cli diff --check`.
+
+## Completed Slice: completions parity boundary audit
+
+- [x] Compare representative Rust and Node `completions` output for bash, fish,
+      and zsh.
+- [x] Update parity docs/ledger so `completions` does not claim byte-for-byte
+      Rust `clap_complete` parity.
+- [x] Add focused docs coverage for the explicit completions boundary.
+- [x] Verify focused docs tests, lint, full Node tests, smoke parity, and diff
+      hygiene.
+
+## Review: completions parity boundary audit
+
+- Audited Rust-vs-Node `completions` output for bash, fish, and zsh. Rust emits
+  full `clap_complete` command/option trees for `agent-loop`; Node emits compact
+  custom scripts for both `agent-loop` and `agent-loop-node`.
+- Updated the parity matrix and unsupported docs to mark `completions` as
+  partial for exact generated-output parity instead of covered.
+- Added focused docs coverage so the `clap_complete` boundary and
+  `agent-loop-node` alias difference stay explicit.
+- Verification: `npm test -- test/docs.test.js test/parser.test.js test/commands.test.js`,
+  `npm run lint`, `npm test -- --test-reporter=dot`, `npm run parity:smoke`,
+  and `git -C node-cli diff --check`.
+
+## Completed Slice: analyze-coverage JSON parity-smoke evidence
+
+- [x] Confirm Rust-vs-Node JSON `analyze-coverage` output can be smoke-compared
+      without broad harness changes.
+- [x] Add JSON parity-smoke scenarios for complete and incomplete
+      `analyze-coverage` paths.
+- [x] Update parity docs/ledger to cite JSON smoke evidence instead of
+      Node-only JSON coverage.
+- [x] Verify focused parity tests, docs tests, lint, full Node tests, smoke
+      parity, and diff hygiene.
+
+## Review: analyze-coverage JSON parity-smoke evidence
+
+- Added Rust-vs-Node JSON parity-smoke scenarios for complete and incomplete
+  `analyze-coverage` paths, reusing the same fixtures as the existing plain
+  output cases.
+- Updated parity docs and unsupported-command notes so JSON `analyze-coverage`
+  coverage is smoke-backed rather than only Node-test-backed.
+- Verification: `npm test -- test/parity-smoke.test.js test/docs.test.js`,
+  `npm run parity:smoke -- --scenario analyze-coverage-complete,json-analyze-coverage-complete,analyze-coverage-incomplete,json-analyze-coverage-incomplete`,
+  `npm run lint`, `npm test -- --test-reporter=dot`, `npm run parity:smoke`,
+  and `git -C node-cli diff --check`.
+
+## Completed Slice: analyze-coverage parity-smoke evidence
+
+- [x] Add Rust-vs-Node parity-smoke scenarios for missing `spec.md` and missing
+      `tasks.md` error paths.
+- [x] Add Rust-vs-Node parity-smoke scenarios for incomplete coverage with
+      missing requirements and orphan task blocks.
+- [x] Compare stdout, stderr, exit code, and plain output for the new
+      `analyze-coverage` scenarios.
+- [x] Update parity docs/ledger to cite expanded `analyze-coverage` smoke
+      evidence.
+- [x] Verify focused parity tests, docs tests, lint, full Node tests, smoke
+      parity, and diff hygiene.
+
+## Review: analyze-coverage parity-smoke evidence
+
+- Added Rust-vs-Node parity-smoke scenarios for missing `spec.md`, missing
+  `tasks.md`, and incomplete coverage with an uncovered requirement plus an
+  orphan task block.
+- Matched Rust's `State error:` prefix for missing `analyze-coverage` state
+  files while preserving the existing coverage reporting behavior.
+- Updated parity docs to cite complete, missing-state, and incomplete plain
+  output smoke evidence; JSON output remains covered by focused Node tests.
+- Verification: `npm test -- test/commands.test.js test/parity-smoke.test.js test/docs.test.js`,
+  `npm run parity:smoke -- --scenario analyze-coverage-missing-spec,analyze-coverage-missing-tasks,analyze-coverage-incomplete`,
+  `npm run lint`, `npm test -- --test-reporter=dot`, `npm run parity:smoke`,
+  and `git -C node-cli diff --check`.
+
+## Completed Slice: approval command parity-smoke evidence
+
+- [x] Add seeded Rust-vs-Node parity-smoke scenarios for plain/JSON
+      `approve plan`.
+- [x] Add seeded Rust-vs-Node parity-smoke scenarios for plain/JSON
+      `reject plan --reason`.
+- [x] Compare stdout, stderr, exit code, per-decision `response.json`, and
+      legacy `decision_response.json` state files for approval commands.
+- [x] Update parity docs/ledger to cite approval smoke evidence and keep broader
+      approval-gate orchestration gaps explicit.
+- [x] Verify focused parity tests, docs tests, lint, full Node tests, smoke
+      parity, and diff hygiene.
+
+## Review: approval command parity-smoke evidence
+
+- Added seeded Rust-vs-Node parity-smoke scenarios for plain/JSON
+  `approve plan` and plain/JSON `reject plan --reason`.
+- The smoke harness now compares stdout, stderr, exit code,
+  `.agent-loop/state/decisions/<decision_id>/response.json`, and legacy
+  `.agent-loop/state/decision_response.json`; `chosen_at` is normalized as a
+  dynamic timestamp.
+- Updated parity docs to cite approval smoke evidence while keeping broader
+  plan approval gate orchestration under the `plan`/pipeline runtime gaps.
+- Verification: `npm test -- test/parity-smoke.test.js test/docs.test.js`,
+  `npm run parity:smoke -- --scenario approve-plan,json-approve-plan,reject-plan,json-reject-plan`,
+  `npm run lint`, `npm test -- --test-reporter=dot`, `npm run parity:smoke`,
+  and `git -C node-cli diff --check`.
+
+## Completed Slice: goal lifecycle parity-smoke evidence
+
+- [x] Add seeded Rust-vs-Node parity-smoke scenarios for plain/JSON
+      `goal status`.
+- [x] Add seeded Rust-vs-Node parity-smoke scenarios for plain/JSON
+      `goal resume` and `goal clear`, including `goal.lock` where mutation
+      should touch the lock file.
+- [x] Compare stdout, stderr, exit code, `goal.json`, and lock-file state for
+      the new lifecycle scenarios.
+- [x] Update parity docs/ledger to cite expanded goal lifecycle fixture evidence
+      while keeping supervisor creation/resume and budget checkpoint gaps
+      explicit.
+- [x] Verify focused parity tests, docs tests, lint, full Node tests, smoke
+      parity, and diff hygiene.
+
+## Review: goal lifecycle parity-smoke evidence
+
+- Added seeded Rust-vs-Node parity-smoke scenarios for plain/JSON
+  `goal status`, plain/JSON `goal resume`, and plain/JSON `goal clear`.
+- Updated the existing seeded `goal pause` smoke scenario to compare
+  `goal.lock` as well as `goal.json`, so mutating lifecycle commands now prove
+  lock-file creation in the smoke harness.
+- Updated parity docs to cite seeded status/pause/resume/clear lifecycle
+  fixture evidence while keeping goal creation supervisor execution, budget
+  checkpoints, supervisor checkpoints, and full flock parity as open gaps.
+- Verification: `npm test -- test/parity-smoke.test.js test/docs.test.js`,
+  `npm run parity:smoke -- --scenario goal-status-seeded,json-goal-status-seeded,goal-resume-seeded,json-goal-resume-seeded,goal-clear-seeded,json-goal-clear-seeded,goal-pause-state`,
+  `npm run lint`, `npm test -- --test-reporter=dot`, `npm run parity:smoke`,
+  and `git -C node-cli diff --check`.
+
+## Completed Slice: queue add parity-smoke evidence
+
+- [x] Add scenario-local parity-smoke normalization for generated queue IDs
+      without weakening seeded exact-ID queue fixtures.
+- [x] Add plain/JSON Rust-vs-Node `queue add` parity-smoke scenarios.
+- [x] Compare stdout, stderr, exit code, and `goal-queue.json` state for
+      `queue add`.
+- [x] Update parity docs/ledger to cite smoke-backed `queue add` evidence and
+      the normalized random-ID boundary.
+- [x] Verify focused parity tests, docs tests, lint, full Node tests, smoke
+      parity, and diff hygiene.
+
+## Review: queue add parity-smoke evidence
+
+- Added scenario-local parity-smoke normalization for generated `queue_id`
+  fields and the short ID in plain `queue add` output, without changing exact
+  ID checks for seeded queue fixtures.
+- Added plain/JSON Rust-vs-Node `queue add` scenarios comparing stdout,
+  stderr, exit code, and `goal-queue.json` state with generated IDs normalized.
+- Updated parity docs to cite smoke-backed `queue add` evidence alongside the
+  existing seeded list/status/pause/resume/cancel queue fixture comparisons.
+- Verification: `npm test -- test/parity-smoke.test.js test/docs.test.js`,
+  `npm run parity:smoke -- --scenario queue-add,json-queue-add`,
+  `npm run lint`, `npm test -- --test-reporter=dot`, `npm run parity:smoke`,
+  and `git -C node-cli diff --check`.
+
+## Completed Slice: queue list/cancel parity-smoke evidence
+
+- [x] Add seeded Rust-vs-Node parity-smoke scenarios for plain/JSON
+      `queue list`.
+- [x] Add seeded Rust-vs-Node parity-smoke scenarios for plain/JSON
+      `queue cancel`.
+- [x] Compare stdout, stderr, exit code, and `goal-queue.json` state for the
+      new scenarios.
+- [x] Update parity docs/ledger to cite expanded lifecycle fixture evidence and
+      keep random-ID `queue add` evidence separate.
+- [x] Verify focused parity tests, docs tests, lint, full Node tests, smoke
+      parity, and diff hygiene.
+
+## Review: queue list/cancel parity-smoke evidence
+
+- Added seeded Rust-vs-Node parity-smoke scenarios for plain/JSON
+  `queue list` and plain/JSON `queue cancel`, comparing stdout, stderr, exit
+  code, and `goal-queue.json` state.
+- Updated the parity matrix and unsupported docs to state that seeded
+  list/status/pause/resume/cancel queue fixtures are smoke-compared against
+  Rust, while `queue add` remains covered by focused Node tests because both
+  CLIs generate random queue IDs.
+- Verification: `npm test -- test/parity-smoke.test.js test/docs.test.js`,
+  `npm run parity:smoke -- --scenario queue-list-seeded,json-queue-list-seeded,queue-cancel-seeded,json-queue-cancel-seeded`,
+  `npm run lint`, `npm test -- --test-reporter=dot`, `npm run parity:smoke`,
+  and `git -C node-cli diff --check`.
+
+## Completed Slice: queue lifecycle parity-smoke evidence
+
+- [x] Confirm queue lifecycle implementation already has focused Node coverage
+      and direct Rust source evidence for status/mutation output.
+- [x] Add deterministic Rust-vs-Node parity-smoke scenarios for seeded
+      `queue status`, `queue pause`, and `queue resume` paths.
+- [x] Compare stdout, stderr, exit code, and `goal-queue.json` state for the
+      new scenarios.
+- [x] Update parity docs/ledger to cite the stronger queue lifecycle evidence.
+- [x] Verify focused parity tests, lint, full Node tests, smoke parity, and diff
+      hygiene.
+
+## Review: queue lifecycle parity-smoke evidence
+
+- Added seeded Rust-vs-Node parity-smoke scenarios for plain/JSON
+  `queue status`, plain/JSON `queue pause`, and plain `queue resume`,
+  comparing stdout, stderr, exit code, and `goal-queue.json` state.
+- Updated the parity matrix and unsupported docs to cite the stronger queue
+  lifecycle evidence while keeping supervisor sync/finalization, interruptions,
+  budget limits, unsupported runtime failures, and full flock locking as open
+  gaps.
+- Verification: `npm test -- test/parity-smoke.test.js test/docs.test.js`,
+  `npm run parity:smoke -- --scenario queue-status-seeded,json-queue-status-seeded,queue-pause-seeded,json-queue-pause-seeded,queue-resume-seeded`,
+  `npm run lint`, `npm test -- --test-reporter=dot`, `npm run parity:smoke`,
+  and `git -C node-cli diff --check`.
+
+## Completed Slice: active queue non-zero resume finalization
+
+- [x] Compare Rust and Node behavior for `resume` with an active queue item,
+      active goal, and a supported non-zero `next` fallback route.
+- [x] Add focused tests showing `resume` finalizes the queue item as blocked
+      while leaving the active goal active after a supported non-zero route.
+- [x] Add a parity-smoke scenario comparing stdout, stderr, exit code, and
+      `goal-queue.json` state for the non-zero route.
+- [x] Update the existing resume finalization helper to finalize queues for
+      supported non-zero routes without completing goals or broadening
+      unsupported supervisor/pipeline boundaries.
+- [x] Update parity docs/ledger and verify focused tests, lint, smoke parity,
+      and diff hygiene.
+
+## Review: active queue non-zero resume finalization
+
+- Plain `resume` now leaves active goals active and finalizes active queue
+  items to `blocked` with `Queue run exited with code 1.` after supported
+  `next` hard-error routes, matching Rust for the deterministic non-zero
+  fallback subset.
+- The parity smoke harness now compares `resume-active-queue-error` across
+  stdout, stderr, exit code, `goal.json`, and `goal-queue.json`.
+- Verification: `npm test -- test/parser.test.js test/commands.test.js`,
+  `npm test -- test/docs.test.js test/parity-smoke.test.js test/bin-entrypoint.test.js`,
+  `npm run lint`, `npm test -- --test-reporter=dot`, `npm run parity:smoke`,
+  and `git -C node-cli diff --check`.
+
+## Completed Slice: active queue resume finalization
+
+- [x] Compare Rust and Node behavior for `resume` with an active queue item,
+      active goal, and a supported complete `next` fallback route.
+- [x] Add focused tests showing `resume` finalizes the queue item after a
+      supported successful route in plain and JSON modes.
+- [x] Add a small queue state helper that maps the active goal status and exit
+      code into Rust-compatible queue finalization.
+- [x] Wire non-dry `resume` to finalize active queue items without broadening
+      supervisor or pipeline runtime scope.
+- [x] Update parity docs/ledger and verify focused tests, lint, smoke parity,
+      and diff hygiene.
+
+## Review: active queue resume finalization
+
+- Plain `resume` now completes an already-active goal after a supported
+  successful route, matching Rust resume finalization for the supported
+  success subset.
+- Plain/JSON `resume` now finalizes active queue items to `done` with
+  `Queue item completed.` after supported successful routes, while leaving
+  unsupported supervisor/pipeline boundaries and non-zero/interrupted/
+  budget-limit finalization as explicit gaps.
+- Verification: `npm test -- test/parser.test.js test/commands.test.js`,
+  `npm test -- test/docs.test.js test/parity-smoke.test.js test/bin-entrypoint.test.js`,
+  `npm run lint`, `npm test -- --test-reporter=dot`, `npm run parity:smoke`,
+  and `git -C node-cli diff --check`.
+
+## Completed Slice: goal resume run and resume-next routing
+
+- [x] Compare Rust and Node behavior for `goal resume --run` when no resumable
+      state exists in plain and JSON modes, and for non-dry `resume` when the
+      fallback `next` route is complete.
+- [x] Route `goal resume --run` through the existing Node `resume` router after
+      reactivating the goal, instead of stopping at an unsupported boundary.
+- [x] Route non-dry `resume` fallback into the existing Node `next` command
+      instead of treating computed `complete` as unsupported.
+- [x] Add focused tests for no-state plain/JSON parity, resume complete
+      fallback, and successful supported goal-run finalization.
+- [x] Update parity docs/ledger and verify focused tests, lint, smoke parity,
+      and diff hygiene.
+
+## Review: goal resume run and resume-next routing
+
+- `goal resume --run` now reactivates the goal, delegates through the existing
+  `resume` router, preserves no-state plain/JSON behavior, and finalizes the
+  current goal when a supported resume route succeeds.
+- Non-dry `resume` fallback now delegates into `next` instead of returning a
+  computed command boundary, including the complete route and supported state
+  shell paths.
+- Verification: `npm test -- test/parser.test.js test/commands.test.js`,
+  `npm test -- test/docs.test.js test/parity-smoke.test.js test/bin-entrypoint.test.js`,
+  `npm run lint`, `npm test -- --test-reporter=dot`, `npm run parity:smoke`,
+  and `git -C node-cli diff --check`.
 
 ## Assumptions
 
@@ -251,15 +889,15 @@ keeping the JavaScript implementation simple, incremental, and evidence-backed.
 - Project-aware JSON `init` now detects Rust, PHP/Laravel, JavaScript/TypeScript,
   quality commands, browser/E2E commands, and browser-facing projects without
   adding runtime execution complexity.
-- Unsupported implement-capable commands now parse Rust-shaped implement flags
-  and pipeline alias phase metadata before intentionally routing to the
-  unsupported handler.
+- Implementation-capable pipeline aliases and dedicated workflows now parse
+  Rust-shaped implement flags and phase metadata before routing through the
+  pipeline runner where the supported first-pass phase composition exists.
 - `chain` now parses Rust-shaped plan file arguments, validates files, writes
   `.agent-loop/chain.json`, resumes at the first incomplete result, runs
   supported direct Node command steps sequentially, archives successful state,
   and records non-zero step failures. The Rust default `plan-tasks-implement`
-  and broader compound/pipeline step dispatch remain documented gaps until
-  ported.
+  now routes through the dedicated first-pass workflow path; broader
+  compound/pipeline step dispatch remains partial.
 - `next --task/--file` now parses Rust-shaped fresh input and delegates into
   supported selected commands such as `plan` and `spec` state setup. No-input
   agent-invoking `next` routes still keep the existing partial route-printing
@@ -383,11 +1021,15 @@ keeping the JavaScript implementation simple, incremental, and evidence-backed.
   `pipeline.json`/`workflow.txt` exist without `status.json`, and
   action-required output for paused/budget-limited goals plus deferred/blocked
   queue items. Active queue items now hydrate active `goal.json` before runtime
-  routing, and non-dry-run supervisor, pipeline, interrupted workflow, and
-  `next` fallback routes print Rust's pre-runtime messages before handoff.
-  Interrupted workflow routes now delegate to the existing Node resume command
-  shells instead of a generic unsupported handler. Full pipeline, supervise, and
-  phase execution paths remain partial.
+  routing, non-dry-run supervisor, pipeline, interrupted workflow, and `next`
+  fallback routes print Rust's pre-runtime messages before handoff, and
+  supported successful resume routes complete active goals and finalize active
+  queue items to `done`. Supported `next` hard-error routes now leave active
+  goals active and finalize active queue items to `blocked`. Interrupted
+  workflow routes now delegate to the existing Node resume command shells
+  instead of a generic unsupported handler. Full pipeline, supervise, phase
+  execution, interruption finalization, budget-limit finalization, and
+  unsupported-runtime finalization paths remain partial.
 - `pipeline --resume` now validates Rust phase rules, writes Rust-shaped
   `pipeline.json`, verifies the active workflow belongs to the requested phases,
   and delegates to the existing Node resume command shells. Fresh pipeline
@@ -415,9 +1057,10 @@ keeping the JavaScript implementation simple, incremental, and evidence-backed.
   status values, reason handling, and exit codes for the supported subset.
   Goal creation from text, `--objective`, or `--file` now writes Rust-compatible
   active `goal.json` state and then stops at the explicit unsupported
-  supervisor-run boundary. `goal resume --run` now marks the goal active and
-  clears the pause reason before the explicit unsupported resume-orchestration
-  boundary.
+  supervisor-run boundary. `goal resume --run` now marks the goal active,
+  clears the pause reason, delegates through `resume`, and completes the goal
+  when a supported route succeeds. Plain `resume` also completes an active goal
+  after a supported successful route.
 - `queue add`, `queue list`, `queue status`, `queue pause`, `queue resume`,
   and `queue cancel` now parse and execute as lifecycle commands
   against Rust-compatible `goal-queue.json`. Mutating commands create
@@ -425,7 +1068,10 @@ keeping the JavaScript implementation simple, incremental, and evidence-backed.
   protection, plain/JSON output, and exit codes match the supported Rust paths.
   `queue resume <id> --run` now performs Rust-shaped state prep by marking the
   item runnable, activating it, deferring any previous active run, and creating
-  active `goal.json`; supervisor execution remains unsupported.
+  active `goal.json`; plain/JSON `resume` finalizes active queue items to
+  `done` after supported successful routes and `blocked` after supported
+  `next` hard-error routes. Supervisor execution and broader
+  interrupted/budget-limit/unsupported-runtime finalization remain unsupported.
 - `supervise --queue` now performs Rust-shaped state prep by rejecting task,
   file, and resume combinations, activating the current active run or next
   eligible queued item using priority/dependency rules, creating active
@@ -466,6 +1112,246 @@ keeping the JavaScript implementation simple, incremental, and evidence-backed.
 
 ## Review
 
+- 2026-06-17: Ported TUI command-surface help parity while keeping the runtime
+  explicitly unsupported. `tui --help` and `help tui` now route through
+  `formatCommandHelpText` with Rust-shaped title, usage, `[PATH]...`
+  arguments, shared options, JSON help event, and elapsed handling. Plain
+  `tui` still exits through the unsupported-command boundary because the
+  interactive dashboard runtime is not ported. Verification: Rust-vs-Node spot
+  checks for `tui --help` and `--json help tui` matched command header, usage,
+  arguments, option ordering, JSON event type, exit 0, and clean stderr with
+  only Clap padding whitespace differences; `npm test --
+  test/parser.test.js test/commands.test.js` (220 passing); `npm test --
+  test/docs.test.js test/parity-smoke.test.js test/bin-entrypoint.test.js` (8
+  passing); `npm run lint` (86 JavaScript files); `npm test --
+  --test-reporter=dot` (passed); `npm run parity:smoke` (45 scenarios); and
+  `git diff --check`. No Rust build was created; `cargo clean --manifest-path
+  cli/Cargo.toml` was not needed.
+- 2026-06-17: Ported command-specific help for hidden pipeline aliases such as
+  `spec-plan`, `plan-tasks`, `spec-plan-implement`, and
+  `plan-implement-verify`. Alias help is now generated from
+  `pipelineAliases.js` metadata with Rust-shaped titles, usage forms,
+  positional/option-task argument handling, implement flag ordering, and JSON
+  help events. Representative parser and command tests cover prep aliases,
+  spec-leading implement aliases, title overrides, and option-task
+  implement/verify aliases. Verification: Rust-vs-Node spot checks for
+  `plan-tasks --help`, `spec-plan-implement --help`, and
+  `--json help plan-implement-verify` matched command headers, usage, option
+  ordering, JSON event type, exit 0, and clean stderr with only Clap padding
+  whitespace differences; `npm test -- test/parser.test.js test/commands.test.js`
+  (218 passing); `npm test -- test/docs.test.js test/parity-smoke.test.js
+  test/bin-entrypoint.test.js` (8 passing); `npm run lint` (86 JavaScript
+  files); `npm test -- --test-reporter=dot` (passed); `npm run parity:smoke`
+  (45 scenarios); and `git diff --check`. No Rust build was created; `cargo
+  clean --manifest-path cli/Cargo.toml` was not needed.
+- 2026-06-17: Ported command-specific help for dedicated implementation
+  workflow commands: `plan-implement`, `tasks-implement`, and
+  `plan-tasks-implement`. These now route through `formatCommandHelpText` for
+  direct `--help`, `help <command>`, and JSON help event forms. The planning
+  workflow help shape mirrors Rust's positional task argument, discovery,
+  resume, single-agent, per-task/wave, retry, model override, and effort flags;
+  `tasks-implement` mirrors Rust's existing-plan/file-oriented option order.
+  Verification: Rust-vs-Node spot checks for `plan-implement --help`, `help
+  tasks-implement`, and `--json plan-tasks-implement --help` confirmed matching
+  command headers/usage/options, JSON event type, exit 0, and clean stderr with
+  only Clap padding whitespace differences on blank option descriptions; `npm
+  test -- test/parser.test.js test/commands.test.js` (216 passing); `npm test
+  -- test/docs.test.js test/parity-smoke.test.js test/bin-entrypoint.test.js`
+  (8 passing); `npm run lint` (86 JavaScript files); `npm test --
+  --test-reporter=dot` (passed); `npm run parity:smoke` (45 scenarios); and
+  `git diff --check`. No Rust build was created; `cargo clean --manifest-path
+  cli/Cargo.toml` was not needed.
+- 2026-06-17: Ported command-specific help for orchestration commands:
+  `pipeline` and `supervise`. Both now route through `formatCommandHelpText`
+  for direct `--help`, `help <command>`, and JSON help event forms. Dedicated
+  option blocks mirror Rust's command-specific order for phase selection,
+  task/file input, discovery, resume, queue mode, single-agent, implement-mode,
+  model override, and effort flags. Verification: Rust-vs-Node spot checks for
+  `supervise --help` and `--json help pipeline` confirmed matching command
+  headers/usage/options, JSON event type, exit 0, and clean stderr with only
+  Clap padding whitespace differences on blank option descriptions; `npm test
+  -- test/parser.test.js test/commands.test.js` (214 passing); `npm test --
+  test/docs.test.js test/parity-smoke.test.js test/bin-entrypoint.test.js` (8
+  passing); `npm run lint` (86 JavaScript files); `npm test --
+  --test-reporter=dot` (passed); `npm run parity:smoke` (45 scenarios); and
+  `git diff --check`. No Rust build was created; `cargo clean --manifest-path
+  cli/Cargo.toml` was not needed.
+- 2026-06-17: Ported command-specific help for implementation commands:
+  `implement` and `implement-verify`. Both now route through
+  `formatCommandHelpText` for direct `--help`, `help <command>`, and JSON help
+  event forms. A shared implement-mode help block mirrors Rust's option order
+  for task/file input, resume, single-agent, per-task/wave, retry, parallelism,
+  action override, and effort flags. Verification: Rust-vs-Node spot checks for
+  `implement --help` and `--json help implement-verify` confirmed matching
+  command headers/usage/options, JSON event type, exit 0, and clean stderr with
+  only Clap padding whitespace differences on blank option descriptions;
+  `npm test -- test/parser.test.js test/commands.test.js` (212 passing);
+  `npm test -- test/docs.test.js test/parity-smoke.test.js
+  test/bin-entrypoint.test.js` (8 passing); `npm run lint` (86 JavaScript
+  files); `npm test -- --test-reporter=dot` (passed);
+  `npm run parity:smoke` (45 scenarios); and `git diff --check`. No Rust build
+  was created; `cargo clean --manifest-path cli/Cargo.toml` was not needed.
+- 2026-06-17: Ported command-specific help for direct runtime commands:
+  `inline`, `review`, `verify`, `discuss`, and `chain`. These now route
+  through `formatCommandHelpText` for direct `--help`, `help <command>`, and
+  JSON help event forms. The command headers, usage lines, argument sections,
+  command-specific options, and option ordering follow the Rust help surface;
+  Node keeps its existing `.agent-loop.json` wording in the shared extended
+  help. Verification: Rust-vs-Node spot checks for `inline --help`, `help
+  review`, `--json verify --help`, `discuss --help`, and `--json help chain`
+  confirmed matching command headers/usage/options, JSON event type, exit 0,
+  and clean stderr with only Clap padding whitespace differences on blank
+  `--session` descriptions; `npm test -- test/parser.test.js
+  test/commands.test.js` (210 passing); `npm test -- test/docs.test.js
+  test/parity-smoke.test.js test/bin-entrypoint.test.js` (8 passing);
+  `npm run lint` (86 JavaScript files); `npm test -- --test-reporter=dot`
+  (passed); `npm run parity:smoke` (45 scenarios); and `git diff --check`.
+  No Rust build was created; `cargo clean --manifest-path cli/Cargo.toml` was
+  not needed.
+- 2026-06-17: Ported command-specific help for phase commands: `spec`, `plan`,
+  and `tasks`. These now route through `formatCommandHelpText` for direct
+  `--help`, `help <command>`, and JSON help event forms. The command headers,
+  usage lines, arguments, and phase-specific option ordering follow the Rust
+  help surface; Node keeps its existing `.agent-loop.json` wording in the
+  shared extended help. Verification: Rust-vs-Node spot checks for `spec
+  --help`, `help plan`, and `--json tasks --help` confirmed matching command
+  headers/usage/options, JSON event type, exit 0, and clean stderr with only
+  Clap padding whitespace differences on blank phase option descriptions;
+  `npm test -- test/parser.test.js test/commands.test.js` (208 passing);
+  `npm test -- test/docs.test.js test/parity-smoke.test.js
+  test/bin-entrypoint.test.js` (8 passing); `npm run lint` (86 JavaScript
+  files); `npm test -- --test-reporter=dot` (passed);
+  `npm run parity:smoke` (45 scenarios); and `git diff --check`. No Rust build
+  was created; `cargo clean --manifest-path cli/Cargo.toml` was not needed.
+- 2026-06-17: Ported command-specific help for supported read-only/routing
+  commands: `analyze-coverage`, `next`, `resume`, `list-agents`, and
+  `version`. These now route through `formatCommandHelpText` for direct
+  `--help`, `help <command>`, and JSON help event forms. The command-specific
+  option lines for `next --task/--file` and `resume --dry-run` match the Rust
+  help surface, while Node keeps the shared `.agent-loop.json` extended-help
+  wording. Verification: Rust-vs-Node spot checks for `analyze-coverage
+  --help`, `help next`, `resume --help`, `list-agents --help`, and
+  `--json help version` confirmed matching command headers/usage/options, exit
+  0, and clean stderr with only formatting whitespace differences on empty
+  `--session` descriptions; `npm test -- test/parser.test.js
+  test/commands.test.js` (206 passing); `npm test -- test/docs.test.js
+  test/parity-smoke.test.js test/bin-entrypoint.test.js` (8 passing);
+  `npm run lint` (86 JavaScript files); `npm test -- --test-reporter=dot`
+  (passed); `npm run parity:smoke` (45 scenarios); and `git diff --check`.
+  No Rust build was created; `cargo clean --manifest-path cli/Cargo.toml` was
+  not needed.
+- 2026-06-17: Ported command-specific help for lifecycle/control commands:
+  `goal`, `queue`, `approve`, and `reject`. These now route through
+  `formatCommandHelpText` for direct `--help`, `help <command>`, and JSON help
+  event forms, while preserving Node's `.agent-loop.json` wording in the
+  shared extended help. The `goal` help includes Rust's lifecycle subcommands,
+  objective argument, goal-specific options, and implement-mode flags; `queue`
+  lists the queue subcommands; `approve`/`reject` include the required phase
+  argument and rejection reason help. Verification: Rust-vs-Node spot checks
+  for `goal --help`, `help queue`, `approve --help`, and `--json help reject`
+  confirmed matching command headers/usage/argument sections, exit 0, and
+  clean stderr with only formatting whitespace differences on empty `--session`
+  descriptions; `npm test -- test/parser.test.js test/commands.test.js` (204
+  passing); `npm test -- test/docs.test.js test/parity-smoke.test.js
+  test/bin-entrypoint.test.js` (8 passing); `npm run lint` (86 JavaScript
+  files); `npm test -- --test-reporter=dot` (passed);
+  `npm run parity:smoke` (45 scenarios); and `git diff --check`. No Rust build
+  was created; `cargo clean --manifest-path cli/Cargo.toml` was not needed.
+- 2026-06-17: Ported command-specific help for the low-runtime `reset`,
+  `init`, and `completions` commands. These now route through the same
+  `formatCommandHelpText` path as `status`, including `help <command>` and
+  JSON help events, while preserving Node's intentional `.agent-loop.json`
+  config wording. Added a small shared command-options formatter so command
+  help stays simple and does not duplicate the global flag block per command.
+  Verification: Rust-vs-Node spot checks for `reset --help`, `help init`, and
+  `--json help completions` confirmed matching command headers/usage,
+  supported shell values, exit 0, and clean stderr with only the expected TOML
+  vs JSON wording difference; `npm test -- test/parser.test.js
+  test/commands.test.js` (202 passing); `npm test -- test/docs.test.js
+  test/parity-smoke.test.js test/bin-entrypoint.test.js` (8 passing);
+  `npm run lint` (86 JavaScript files); `npm test -- --test-reporter=dot`
+  (passed); `npm run parity:smoke` (45 scenarios); and `git diff --check`.
+  No Rust build was created; `cargo clean --manifest-path cli/Cargo.toml` was
+  not needed.
+- 2026-06-17: Ported the first command-specific help slice. `status --help`
+  and `help status` now render Rust-shaped status command help instead of
+  falling back to global help, including JSON help events for `--json status
+  --help` and `--json help status`. The status help keeps Node's intentional
+  `.agent-loop.json` wording in the shared extended help block; broader
+  subcommand help remains a future command-by-command parity task. Verification:
+  Rust-vs-Node spot checks for plain `status --help` and JSON `help status`;
+  `npm test -- test/parser.test.js test/commands.test.js` (200 passing);
+  `npm test -- test/docs.test.js test/parity-smoke.test.js
+  test/bin-entrypoint.test.js` (8 passing); `npm run lint` (86 JavaScript
+  files); `npm test -- --test-reporter=dot` (passed);
+  `npm run parity:smoke` (45 scenarios); and `git diff --check`. No Rust build
+  was created; `cargo clean --manifest-path cli/Cargo.toml` was not needed.
+- 2026-06-17: Fixed the unknown leading global option parser boundary. Rust
+  rejects `agent-loop --wat` with exit 1 and no stdout; Node previously treated
+  the unknown option as no-command help and exited 0. `parseCliFrom` now rejects
+  unknown leading options before command selection, while command-level unknown
+  args still flow through existing command parsers. Added parser and public
+  command tests for `--wat`, and updated the parity matrix global JSON/parse
+  note. Verification: Rust-vs-Node spot check for `--wat`; `npm test --
+  test/parser.test.js test/commands.test.js` (198 passing); `npm test --
+  test/docs.test.js test/parity-smoke.test.js test/bin-entrypoint.test.js`
+  (8 passing); `npm run lint` (86 JavaScript files);
+  `npm test -- --test-reporter=dot` (passed); `npm run parity:smoke` (45
+  scenarios); and `git diff --check`. No Rust build was created;
+  `cargo clean --manifest-path cli/Cargo.toml` was not needed.
+- 2026-06-17: Ported the Rust-shaped outer elapsed formatter. Node now emits
+  `Elapsed: HH:MM:SS` for plain command paths that still use the outer runner
+  timing line, matching Rust spot checks for `status` and `--version`; JSON
+  mode remains silent in non-TTY command tests, and `resume`, `list-agents`, and
+  `completions` stay suppressed by the previous no-elapsed boundary. Added a
+  pure formatter test plus representative plain `status` output coverage, and
+  updated the parity smoke normalization sample and matrix notes. Verification:
+  Rust-vs-Node spot checks for `status`, `--version`, and `list-agents`;
+  `npm test -- test/commands.test.js test/parity-smoke.test.js` (173 passing);
+  `npm test -- test/parser.test.js test/docs.test.js test/bin-entrypoint.test.js`
+  (31 passing); `npm run lint` (86 JavaScript files);
+  `npm test -- --test-reporter=dot` (passed); `npm run parity:smoke` (45
+  scenarios); and `git diff --check`. No Rust build was created;
+  `cargo clean --manifest-path cli/Cargo.toml` was not needed.
+- 2026-06-17: Ported the next elapsed-output boundary slice. Node now suppresses
+  the outer elapsed line for `resume`, `list-agents`, and `completions`, matching
+  Rust samples for no-state/dry-run/action-required `resume`, introspection, and
+  completion generation. Parser metadata tests now guard the suppression set,
+  command tests assert quiet stderr/stdout for the affected paths, and
+  `docs/parity-matrix.md` no longer says the `chain` default
+  `plan-tasks-implement` remains unsupported. Verification: `npm test --
+  test/docs.test.js test/parser.test.js` (27 passing), `npm test --
+  test/commands.test.js` (168 passing), `npm run lint` (86 JavaScript files),
+  `npm test -- --test-reporter=dot` (passed), `npm run parity:smoke` (45
+  scenarios), and `git diff --check`. No Rust build was created;
+  `cargo clean --manifest-path cli/Cargo.toml` was not needed.
+- 2026-06-17: Ported Rust-shaped default/help output for Node. `src/app/help.js`
+  now mirrors Rust's command list, primary command examples, environment/config
+  help, review-gate notes, progress log notes, and model/env option sections
+  while preserving Node's intentional `.agent-loop.json` config wording.
+  No-command help now renders session-aware state paths such as
+  `.agent-loop/state/<session>/transcript.log`; JSON help emits the same
+  Rust-shaped text inside the `help` event. `docs/parity-matrix.md` now marks
+  default/no-command help covered for this Node-specific contract. Verification:
+  `npm test -- test/docs.test.js test/parser.test.js test/commands.test.js`
+  (194 passing), `npm run lint` (86 JavaScript files),
+  `npm test -- --test-reporter=dot` (passed), `npm run parity:smoke` (45
+  scenarios), and `git diff --check`. No Rust build was created;
+  `cargo clean --manifest-path cli/Cargo.toml` was not needed.
+- 2026-06-17: Completed the dedicated implementation workflow command slice.
+  Node now treats `plan-implement`, `tasks-implement`, and
+  `plan-tasks-implement` as supported Rust workflow commands that dispatch into
+  the pipeline runner without the legacy alias note, and `chain` default
+  dispatch can run `plan-tasks-implement` through the same first-pass workflow
+  path. `docs/unsupported.md` now lists only true unsupported command names and
+  `test/docs.test.js` checks the docs list against `UNSUPPORTED_COMMANDS`.
+  Remaining parity gaps are the documented full planning loops, real task
+  decomposition, per-task/wave execution, and complete resume transitions.
+  Verification: `npm test -- test/parser.test.js test/commands.test.js
+  test/docs.test.js` (193 passing), `npm run lint` (86 JavaScript files),
+  `npm test -- --test-reporter=dot` (passed), `npm run parity:smoke` (45
+  scenarios), and `git diff --check`. No Rust build was created;
+  `cargo clean --manifest-path cli/Cargo.toml` was not needed.
 - 2026-06-17: Ported the next compound/pipeline alias execution slice. Node now
   treats Rust pipeline aliases as supported dispatches into the canonical
   pipeline runner, emits the Rust legacy-alias note, removes those aliases from
@@ -690,8 +1576,9 @@ keeping the JavaScript implementation simple, incremental, and evidence-backed.
   files, writes `.agent-loop/chain.json`, resumes at the first incomplete
   result, runs supported direct command steps such as `plan`, archives
   successful state, records non-zero step failures, and has Rust-vs-Node smoke
-  coverage for missing-file errors. The default `plan-tasks-implement` step and
-  broader compound/pipeline dispatch remain open.
+  coverage for missing-file errors. The default `plan-tasks-implement` step now
+  routes through the dedicated first-pass workflow path; broader
+  compound/pipeline dispatch remains open.
 - 2026-06-17: Ported `implement` auto-test quality evidence. When `auto_test`
   is enabled, Node runs configured or auto-detected quality commands before
   Gate A review, writes `.agent-loop/state/quality_checks.md`, and references
