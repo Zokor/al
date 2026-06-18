@@ -71,7 +71,7 @@ export function dispatchFromCli(cli) {
 export async function executeDispatch(dispatch, context) {
   switch (dispatch.kind) {
     case DispatchKind.ShowHelp:
-      context.stdout.write(formatHelpText());
+      context.stdout.write(formatHelpText({ session: dispatch.cli.globals.session }));
       return 0;
     case DispatchKind.Version:
       return handleVersion({ jsonMode: dispatch.cli.globals.json, stdout: context.stdout });

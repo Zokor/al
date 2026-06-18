@@ -78,6 +78,22 @@ export async function setGoalStatus(config, status, reason) {
   return updated;
 }
 
+export async function completeGoalIfCurrent(config, goalId) {
+  await touchGoalLock(config);
+  const goal = await readGoal(config);
+  if (!goal || goal.goal_id !== goalId || goal.status !== GoalStatus.Active) {
+    return null;
+  }
+  const updated = {
+    ...goal,
+    status: GoalStatus.Complete,
+    reason: "Goal run completed.",
+    updated_at: timestamp(config),
+  };
+  await writeGoal(config, updated);
+  return updated;
+}
+
 export async function clearGoal(config) {
   await touchGoalLock(config);
   const existed = await goalFileExists(config);

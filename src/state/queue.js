@@ -119,6 +119,33 @@ export async function activateNextQueueItem(config) {
   return activateQueueItemAtIndex(config, queue, targetIndex);
 }
 
+export async function finalizeQueueRunFromGoalStatus(config, queueId, { goalStatus, reason, exitCode }) {
+  await touchQueueLock(config);
+  const queue = await readQueue(config);
+  const index = queue.items.findIndex((item) => item.queue_id === queueId);
+  if (index === -1) {
+    return null;
+  }
+  const existing = queue.items[index];
+  if (TERMINAL_STATUSES.has(existing.status)) {
+    return existing;
+  }
+
+  const { status, reason: finalReason } = finalQueueState(goalStatus, reason, exitCode);
+  const updated = {
+    ...existing,
+    status,
+    reason: finalReason,
+    updated_at: timestamp(config),
+  };
+  if ([QueueStatus.Done, QueueStatus.Deferred, QueueStatus.Cancelled].includes(status)) {
+    delete updated.active_slice_id;
+  }
+  queue.items[index] = normalizeQueueItem(updated);
+  await writeQueue(config, queue);
+  return queue.items[index];
+}
+
 async function activateQueueItemAtIndex(config, queue, targetIndex) {
   const target = queue.items[targetIndex];
   if (TERMINAL_STATUSES.has(target.status)) {
@@ -166,6 +193,22 @@ function nextEligibleIndex(queue) {
     }
   }
   return bestIndex;
+}
+
+function finalQueueState(goalStatus, reason, exitCode) {
+  if (goalStatus === "complete" || (goalStatus === "active" && exitCode === 0) || (!goalStatus && exitCode === 0)) {
+    return { status: QueueStatus.Done, reason: "Queue item completed." };
+  }
+  if (goalStatus === "paused") {
+    return { status: QueueStatus.Deferred, reason: reason ?? "Queue item paused." };
+  }
+  if (goalStatus === "budget_limited") {
+    return { status: QueueStatus.Blocked, reason: reason ?? "Goal budget limit reached." };
+  }
+  return {
+    status: QueueStatus.Blocked,
+    reason: reason ?? `Queue run exited with code ${exitCode}.`,
+  };
 }
 
 export async function writeQueue(config, queue) {

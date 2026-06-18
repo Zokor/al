@@ -1,14 +1,18 @@
 import { resolve } from "node:path";
 
 export function validateSessionName(session) {
-  if (session === undefined || session === null || session === "") {
+  if (session === undefined || session === null) {
     return undefined;
   }
-  if (session.length > 64) {
-    throw new Error("invalid session name: must be at most 64 characters");
+  if (session === "") {
+    throw new Error("Config error: Session name cannot be empty.");
+  }
+  const sessionLength = Buffer.byteLength(session, "utf8");
+  if (sessionLength > 64) {
+    throw new Error(`Config error: Session name too long (${sessionLength} chars, max 64): ${session}`);
   }
   if (!/^[A-Za-z0-9_-]+$/.test(session)) {
-    throw new Error("invalid session name: use ASCII letters, numbers, hyphen, or underscore only");
+    throw new Error(`Config error: Invalid session name '${session}': only alphanumeric, hyphens, and underscores allowed.`);
   }
   return session;
 }

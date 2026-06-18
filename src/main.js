@@ -1,6 +1,6 @@
 import { collectActionOverrides, isJsonRequested, parseCliFrom } from "./app/cli.js";
 import { dispatchFromCli, executeDispatch } from "./app/dispatch.js";
-import { elapsedPrefersStderr, printsElapsedInternally } from "./app/dispatchTypes.js";
+import { elapsedPrefersStderr, printsElapsedInternally, suppressesElapsed } from "./app/dispatchTypes.js";
 import { clearInterrupt, requestInterrupt } from "./state/files.js";
 
 export function emitElapsed(started, { jsonMode = false, preferStderr = false, stdout = process.stdout, stderr = process.stderr, stderrIsTTY = stderr.isTTY } = {}) {
@@ -12,11 +12,24 @@ export function emitElapsed(started, { jsonMode = false, preferStderr = false, s
     return;
   }
   const stream = preferStderr ? stderr : stdout;
-  stream.write(`elapsed: ${(elapsedMs / 1000).toFixed(2)}s\n`);
+  stream.write(formatElapsedText(elapsedMs));
+}
+
+export function formatElapsedText(elapsedMs) {
+  const totalSeconds = Math.floor(Math.max(0, elapsedMs) / 1000);
+  const hours = Math.floor(totalSeconds / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  const pad2 = (value) => String(value).padStart(2, "0");
+  return `Elapsed: ${pad2(hours)}:${pad2(minutes)}:${pad2(seconds)}\n`;
 }
 
 function isInterrupted(error) {
   return error?.name === "AbortError" || error?.code === "SIGINT" || error?.interrupted === true;
+}
+
+function emitsPlainFatalError(message) {
+  return message.startsWith("Config error: ");
 }
 
 export async function runMain({
@@ -57,7 +70,7 @@ export async function runMain({
     parsed.cli.actionOverrides = collectActionOverrides(parsed.cli.globals.actionOverrides);
     const dispatch = dispatchFromCli(parsed.cli);
     const code = await executeDispatch(dispatch, { argv, env, cwd, stdout, stderr, stdin, stderrIsTTY, now, agentRunner, readAnswer });
-    if (!printsElapsedInternally(dispatch)) {
+    if (!printsElapsedInternally(dispatch) && !suppressesElapsed(dispatch)) {
       emitElapsed(started, {
         jsonMode: parsed.cli.globals.json,
         preferStderr: elapsedPrefersStderr(dispatch, parsed.cli.globals.json),
@@ -73,7 +86,7 @@ export async function runMain({
       return 130;
     }
     const message = String(error.message ?? error);
-    if (jsonRequested) {
+    if (jsonRequested && !emitsPlainFatalError(message)) {
       stderr.write(`${JSON.stringify({ type: "error", data: { message } })}\n`);
     } else {
       stderr.write(`${message}\n`);

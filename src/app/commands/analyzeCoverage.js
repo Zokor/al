@@ -35,11 +35,11 @@ function commandStartedEvent(config) {
 export async function analyzeSpecCoverage(config) {
   const spec = await readStateFile(config, "spec.md");
   if (!spec.trim()) {
-    throw new Error("No spec.md found. Run 'agent-loop spec' first.");
+    throw new Error("State error: No spec.md found. Run 'agent-loop spec' first.");
   }
   const tasks = await readStateFile(config, "tasks.md");
   if (!tasks.trim()) {
-    throw new Error("No tasks.md found. Run 'agent-loop tasks' first.");
+    throw new Error("State error: No tasks.md found. Run 'agent-loop tasks' first.");
   }
 
   const requirements = extractRequirementIds(spec);
